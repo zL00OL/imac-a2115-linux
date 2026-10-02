@@ -55,12 +55,11 @@ probably the actual remaining problem.
 
 ## SSH dies mid-command: "No route to host"
 
-**This is the network, not the script.** The host dropped off the network three
-times in one session. `brcmfmac` `txstatus` timeouts were observed; WiFi power
-save was disabled and it did not help.
+**This is the ISP connection, not the machine and not the script.** Not a
+hardware or driver fault — do not debug it as one.
 
-`No route to host` with ARP `INCOMPLETE` means the machine is unreachable at
-layer 2 — it vanished, not merely refused SSH.
+`No route to host` with ARP `INCOMPLETE` means the link dropped: the machine is
+unreachable at layer 2, having vanished rather than refused SSH.
 
 **When a long remote command dies unexpectedly, check reachability first:**
 
