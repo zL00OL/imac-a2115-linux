@@ -20,7 +20,14 @@ their authors.
 | [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher) | The universal 5K patcher approach — where the "patched driver" methodology came from. Multi-distro fork of the driver below. |
 | [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) | **The most directly useful reference.** Documented the CS8409 audio driver, the **iGPU / P3 wide-gamut** work, and the **speaker-EQ limiter** failure analysis matching the audio symptom in `docs/fixes.md`. |
 | [jackdanyell/imac18-3-cs8409-linux-audio](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio) | Upstream CS8409 audio driver used by the patcher above. |
-| [Omarchy](https://github.com/omarch-org/omarchy) | Arch-based iMac-5K and Apple-silicon-on-Linux community work. |
+
+**Omarchy** is a Linux distribution (Arch + Hyprland), not a 5K project. It is
+credited here because it is the *target* of the `ahmadtv/omarchy-imac18-3` port
+above — that project is one person's effort to port the community 5K fixes to
+Omarchy, which makes it the closest counterpart to this repository: same goal,
+different hardware generation, different distro. Useful as a worked example to
+compare against, and the origin of the upstream PRs listed below.
+
 
 
 > [!NOTE]
@@ -77,7 +84,7 @@ The following projects do the actual work.
 
 | Project | Role |
 |---|---|
-| [PipeWire](https://pipewire.org/) / [WirePlumber](https://wireplumber.freedesktop.org/) | The 83-node speaker filter chain in `~/.config/pipewire/pipewire.conf.d/`. MIT. |
+| [PipeWire](https://pipewire.org/) / [WirePlumber](https://pipewire.pages.freedesktop.org/wireplumber/) | The 83-node speaker filter chain in `~/.config/pipewire/pipewire.conf.d/`. MIT. |
 | `snd_hda_macbookpro` / `cs8409` | Cirrus Logic codec driver; the subject of the local audio patch. |
 
 ### Desktop
@@ -102,7 +109,7 @@ The following projects do the actual work.
 | Project | Role |
 |---|---|
 | [DaVinci Resolve](https://www.blackmagicdesign.com/products/davinciresolve) (21.1) | © Blackmagic Design. The app this work made runnable. Proprietary; only its Linux packaging behaviour is documented here. |
-| [APR](https://apr.apache.org/) / [APR-util](https://apr.apache.org/APR-util/) | Built from upstream Apache source tarballs during development, because openSUSE ships no runtime package. Apache-2.0. |
+| [APR](https://apr.apache.org/) / [APR-util](https://apr.apache.org/) | Built from upstream Apache source tarballs during development, because openSUSE ships no runtime package. Apache-2.0. |
 
 ### Distribution tooling
 
