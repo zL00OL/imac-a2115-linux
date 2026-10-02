@@ -63,18 +63,6 @@ looks like a flaky network when it is not.
 
 Use `wget -4` / `curl -4` when a download produces an empty file.
 
-### Link drops — ISP-side, not the machine
-
-The host drops off the network intermittently during long remote sessions
-(ARP INCOMPLETE, not SSH refused). **This is a property of the internet
-connection, not of the iMac.** Do not spend time debugging it as a hardware or
-driver fault.
-
-Worth knowing only because it changes how remote work fails: `No route to host`
-mid-command looks like a script bug rather than a lost link, and every script in
-this repo is written with retry loops and short timeouts to tolerate it.
-
-
 ### Mesa packaging differs from expectation
 
 `rpm -q mesa` reports "not installed" on a working OpenGL system. Mesa is split

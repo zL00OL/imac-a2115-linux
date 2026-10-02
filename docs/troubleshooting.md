@@ -53,27 +53,6 @@ probably the actual remaining problem.
 
 ---
 
-## SSH dies mid-command: "No route to host"
-
-**This is the ISP connection, not the machine and not the script.** Not a
-hardware or driver fault — do not debug it as one.
-
-`No route to host` with ARP `INCOMPLETE` means the link dropped: the machine is
-unreachable at layer 2, having vanished rather than refused SSH.
-
-**When a long remote command dies unexpectedly, check reachability first:**
-
-```bash
-ping -c2 -W3 <host>
-```
-
-Every script in this repo that touches the network is written to tolerate this:
-retry loops, short timeouts, background execution with polling.
-
-Root cause is **unresolved**.
-
----
-
 ## Download produces a 0-byte file
 
 `archive.apache.org` resolves **only** to IPv6 (`2a01:4f9:1a:a084::2`) and this
@@ -145,7 +124,7 @@ packages that were already present.
 
 ---
 
-## Kitten of BLS entries: `kernel-default*` glob matches `-devel`
+## BLS entries: `kernel-default*` glob matches `-devel`
 
 ```bash
 rpm -qa 'kernel-default*'     # matches kernel-default-devel too
