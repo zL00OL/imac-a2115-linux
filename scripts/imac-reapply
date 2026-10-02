@@ -6,7 +6,7 @@
 #   sudo ~/bin/imac-reapply --check      # report only, change nothing
 #   sudo ~/bin/imac-reapply --fix-opencl # only the fragile OpenCL part
 #
-# Why: openSUSE Tumbleweed updates overwrite things. GPU OpenCL in
+# Why: openSUSE Slowroll updates overwrite things. GPU OpenCL in
 # particular lives inside a Flatpak runtime whose hashed path changes on
 # every runtime update, silently killing GPU compute for DaVinci Resolve.
 #==============================================================================

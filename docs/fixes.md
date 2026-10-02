@@ -3,7 +3,8 @@
 These are all **optional**. The 5K tiled display — the reason this repo exists —
 works without any of them.
 
-Distro used: openSUSE Tumbleweed-Slowroll. Portability notes in
+Distro used: openSUSE **Slowroll** (see `docs/distro-matrix.md` for why this over
+Tumbleweed). Portability notes in
 `docs/distro-matrix.md`.
 
 ---
