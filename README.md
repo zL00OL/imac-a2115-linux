@@ -67,7 +67,9 @@ before changing anything.
 | `docs/fixes.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
 | `docs/troubleshooting.md` | failure modes that cost time |
+| `docs/igpu-and-colour.md` | hidden Intel iGPU and P3 wide-gamut — **not yet audited** |
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
+| `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
 | `scripts/imac-update` | update the distro, then re-apply |
 | `THIRD_PARTY_NOTICES.md` | credits for every upstream project relied on |
@@ -81,6 +83,8 @@ each contributed. In particular:
 - [BR1UHNz/retina-5k-imac-linux](https://github.com/BR1UHNz/retina-5k-imac-linux)
 - [armin-haghi/imac-5k-display](https://github.com/armin-haghi/imac-5k-display)
 - [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher)
+- [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) — audio driver, iGPU/P3, and the limiter analysis
+- [jackdanyell/imac18-3-cs8409-linux-audio](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio)
 - [Omarchy](https://github.com/omarch-org/omarchy)
 
 The `amdgpu.tiled_stitch` parameter itself is upstream Linux kernel work from the

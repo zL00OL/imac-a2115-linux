@@ -17,8 +17,26 @@ their authors.
 |---|---|
 | [BR1UHNz/retina-5k-imac-linux](https://github.com/BR1UHNz/retina-5k-imac-linux) | Primary reference for getting the Retina 5K iMac display working on Linux. |
 | [armin-haghi/imac-5k-display](https://github.com/armin-haghi/imac-5k-display) | iMac 5K display configuration and troubleshooting. |
-| [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher) | The universal 5K patcher approach — where the "patched driver" methodology came from. |
-| [Omarchy](https://github.com/omarch-org/omarchy) (bazzite / Omarchy repos) | Arch-based iMac-5K and Apple-silicon-on-Linux community work. |
+| [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher) | The universal 5K patcher approach — where the "patched driver" methodology came from. Multi-distro fork of the driver below. |
+| [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) | **The most directly useful reference.** Documented the CS8409 audio driver, the **iGPU / P3 wide-gamut** work, and the **speaker-EQ limiter** failure analysis matching the audio symptom in `docs/fixes.md`. |
+| [jackdanyell/imac18-3-cs8409-linux-audio](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio) | Upstream CS8409 audio driver used by the patcher above. |
+| [Omarchy](https://github.com/omarch-org/omarchy) | Arch-based iMac-5K and Apple-silicon-on-Linux community work. |
+
+
+> [!NOTE]
+> **`ahmadtv/omarchy-imac18-3` targets the iMac18,3**, not the A2115 of this
+> repository. The two are close siblings - same 5K panel generation, same CS8409
+> codec, same hidden Intel iGPU generation - but are **not identical**. Its
+> findings are treated here as strong hints to verify, not as facts about this
+> machine. Anything it does to the audio driver or iGPU should be re-derived
+> rather than copied blind.
+
+Credit also due to the individuals credited in that project's own credits, which
+trace the 5K work further upstream: **mforce2** (tile wake), **erik2** (stitch),
+**taprobane99** (7.2.x port), and guidance from **Alex Deucher** at AMD, via
+[drm/amd#4455](https://gitlab.freedesktop.org/drm/amd/-/issues/4455). AMD's
+Polaris GPU-hang fix and reset patches were reported upstream in
+[drm/amd#5810](https://gitlab.freedesktop.org/drm/amd/-/issues/5810).
 
 The **`amdgpu.tiled_stitch=1`** parameter that makes this work is an upstream
 Linux kernel feature from the AMD driver team — not the invention of any of the
