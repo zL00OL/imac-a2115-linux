@@ -4,7 +4,7 @@
 Everything else in this repo is secondary.
 
 Hardware: iMac 19,1 / A2115, Radeon RX 580 (`polaris10`), Intel i5-8500.
-Tested on openSUSE Tumbleweed-Slowroll, kernel 7.2.2, Mesa 26.2.2, stock `amdgpu`.
+Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2, stock `amdgpu`.
 
 > [!IMPORTANT]
 > The GPU driver is **stock**. Do not install or load any patched `amdgpu`.
