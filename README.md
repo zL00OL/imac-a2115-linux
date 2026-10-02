@@ -86,6 +86,11 @@ each contributed. In particular:
 - [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) — audio driver, iGPU/P3, and the limiter analysis
 - [jackdanyell/imac18-3-cs8409-linux-audio](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio)
 
+[Omarchy](https://omarchy.org) is a Linux distribution (Arch + Hyprland) rather
+than a 5K project. It is credited because `ahmadtv/omarchy-imac18-3` is one
+person's port of the 5K fixes to it — the closest counterpart to this repo: same
+goal, different hardware generation, different distro.
+
 The `amdgpu.tiled_stitch` parameter itself is upstream Linux kernel work from the
 AMD graphics team.
 
