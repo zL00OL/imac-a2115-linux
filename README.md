@@ -85,7 +85,6 @@ each contributed. In particular:
 - [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher)
 - [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) — audio driver, iGPU/P3, and the limiter analysis
 - [jackdanyell/imac18-3-cs8409-linux-audio](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio)
-- [Omarchy](https://github.com/omarch-org/omarchy)
 
 The `amdgpu.tiled_stitch` parameter itself is upstream Linux kernel work from the
 AMD graphics team.
