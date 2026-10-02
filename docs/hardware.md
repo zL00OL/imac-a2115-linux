@@ -6,7 +6,7 @@
 |---|---|
 | Model | iMac 19,1 / A2115 ("iMac (Retina 5K, 27-inch, 2017)") |
 | Board | Mac-AA95B1DDAB278B95 |
-| System ID | 2763f6296fa5429581eafdbe9b63190c |
+| System ID | *(redacted — stable hardware fingerprint)* |
 | CPU | Intel Core i5-8500, 6 threads, x86-64 |
 | RAM | 31.2 GiB |
 | GPU | AMD Ellesmere / Radeon RX 470-580 family (`polaris10`), 4 GiB VRAM |
@@ -31,7 +31,7 @@ Consequences:
 
 - **Never install or load `amdgpu-stackC-async.ko`.** The async variant is
   known-bad.
-- Loose files like `/home/ilya/5k-build-c/amdgpu-stackC-stitch.ko` are leftovers.
+- Loose files like `/home/<user>/5k-build-c/amdgpu-stackC-stitch.ko` are leftovers.
   They are not loaded and not needed.
 - If you are auditing this machine, judge the driver by
   `modinfo -F srcversion amdgpu`, not by filenames.

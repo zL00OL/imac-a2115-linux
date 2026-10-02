@@ -70,6 +70,21 @@ before changing anything.
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
 | `scripts/imac-update` | update the distro, then re-apply |
+| `THIRD_PARTY_NOTICES.md` | credits for every upstream project relied on |
+
+## Credits
+
+This work stands on the community projects that made 5K iMacs on Linux possible
+in the first place — see `THIRD_PARTY_NOTICES.md` for the full list and for what
+each contributed. In particular:
+
+- [BR1UHNz/retina-5k-imac-linux](https://github.com/BR1UHNz/retina-5k-imac-linux)
+- [armin-haghi/imac-5k-display](https://github.com/armin-haghi/imac-5k-display)
+- [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher)
+- [Omarchy](https://github.com/omarch-org/omarchy)
+
+The `amdgpu.tiled_stitch` parameter itself is upstream Linux kernel work from the
+AMD graphics team.
 
 ## Status
 
