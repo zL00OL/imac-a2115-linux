@@ -176,13 +176,41 @@ distortion across levels plus a hard low-volume cutoff points at a
 **misconfigured limiter/compressor** or a codec/amp effect, most likely the
 Cirrus Logic **CS8409** speaker DSP exposed through ALSA.
 
-Untested hypotheses, in order:
+### Most likely cause found: a boosted low shelf with no limiter
+
+`ahmadtv/omarchy-imac18-3` documents **this exact failure** on the sibling
+iMac18,3, and its analysis fits our symptom precisely:
+
+> "The CS8409/CS42L83 codec applies no DSP on Linux, so this supplies the voicing
+> macOS does in software: lift the low end the small sealed cabinets cannot
+> produce... The limiter replaces a hard clamp used earlier. With a **+7 dB low
+> shelf**, bass transients on a loud master **exceed full scale**, and a clamp
+> resolves that by **clipping** them. The limiter resolves it by **lookahead gain
+> reduction** instead, which is the same protection without the distortion."
+
+So the chain almost certainly does what macOS does — a **low-shelf boost** — and
+with no limiter after it, boosted bass transients **clip**. Combined with raising
+ALSA `Master` to 100%, that produces exactly what we hear: loud and squashed at
+every level.
+
+Their fix: an **LSP lookahead limiter** as the final node, input gain at unity.
+Critically, they note input gain should be left at unity and bass trimmed instead
+of raising the threshold, or the bass audibly pumps.
+
+Two further cautions from that project:
+- Their limiter was configured **stereo, with channels explicitly wired**. A mono
+  graph limits each side independently and **shifts the stereo image** on bass
+  transients.
+- The limiter needs `lsp-plugins-lv2`.
+
+Run `scripts/check-igpu.sh` (section 8) to see whether a bass shelf or any
+limiter is present in our chain.
+
+### Remaining untested hypotheses
 
 1. ALSA "Smart Volume" / speaker-boost / limiter control — check
    `amixer -c0 contents`.
-2. A compressor/limiter or volume-ramp node among the 83 filters in
-   `~/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf`.
-3. Bypassing PipeWire entirely:
+2. Bypassing PipeWire entirely:
    ```bash
    speaker-test -D hw:0,0 -c2 -t sine -f 440 -l1
    mv ~/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf{,.disabled}
