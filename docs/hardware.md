@@ -63,18 +63,17 @@ looks like a flaky network when it is not.
 
 Use `wget -4` / `curl -4` when a download produces an empty file.
 
-### WiFi instability — unresolved
+### Link drops — ISP-side, not the machine
 
-`brcmfmac` `txstatus` timeouts were observed (5 instances), and the host dropped
-off the network entirely **three times in one session** (ARP INCOMPLETE, not
-SSH refused). Power save was turned off (`wlp3s0` reports `Power save: off`),
-which did not fix it.
+The host drops off the network intermittently during long remote sessions
+(ARP INCOMPLETE, not SSH refused). **This is a property of the internet
+connection, not of the iMac.** Do not spend time debugging it as a hardware or
+driver fault.
 
-The drops cause remote work to fail with confusing errors — `No route to host`
-mid-command looks like a script bug, not a network fault. **When a long remote
-operation dies unexpectedly, check reachability first.**
+Worth knowing only because it changes how remote work fails: `No route to host`
+mid-command looks like a script bug rather than a lost link, and every script in
+this repo is written with retry loops and short timeouts to tolerate it.
 
-Open question: whether the drops and the txstatus timeouts share a cause.
 
 ### Mesa packaging differs from expectation
 
