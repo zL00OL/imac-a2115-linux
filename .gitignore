@@ -1,0 +1,13 @@
+# Build artefacts — these must never be installed
+*.ko
+*.o
+squashfs-root/
+.DS_Store
+
+# Resolve installer payload (large, licensed)
+*.run
+*.zip
+
+# ESP/BLS backups and generated initramfs
+5k-stackC-backup/
+initrd-stackC*

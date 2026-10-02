@@ -1,0 +1,247 @@
+#!/bin/bash
+#==============================================================================
+# imac-reapply - re-apply all iMac A2115 customisations after a system update
+#
+#   sudo ~/bin/imac-reapply              # do everything
+#   sudo ~/bin/imac-reapply --check      # report only, change nothing
+#   sudo ~/bin/imac-reapply --fix-opencl # only the fragile OpenCL part
+#
+# Why: openSUSE Tumbleweed updates overwrite things. GPU OpenCL in
+# particular lives inside a Flatpak runtime whose hashed path changes on
+# every runtime update, silently killing GPU compute for DaVinci Resolve.
+#==============================================================================
+set -uo pipefail
+
+CHECK=0
+ONLY=""
+for a in "$@"; do
+  case "$a" in
+    --check) CHECK=1 ;;
+    --fix-opencl) ONLY="opencl" ;;
+    --fix-boot) ONLY="boot" ;;
+    --fix-audio) ONLY="audio" ;;
+    --fix-sddm) ONLY="sddm" ;;
+  esac
+done
+
+LOG=/var/log/imac-reapply.log
+say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
+ok()   { say "  [ ok ] $*"; }
+bad()  { say "  [FAIL] $*"; }
+warn() { say "  [warn] $*"; }
+hint() { say "    fix:  $*"; }
+can()  { [ "$CHECK" -eq 0 ] && { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }; }
+sel()  { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+
+: > "$LOG"
+say "=== imac-reapply $(date -Is)  mode=$([ $CHECK -eq 1 ] && echo check || echo apply) ==="
+[ "$(id -u)" -eq 0 ] || { say "must run as root: sudo ~/bin/imac-reapply"; exit 1; }
+
+#--------------------------------------------------------------------- kernel
+say ""; say "[kernel]"
+CUR=$(uname -r)
+CURV=$(echo "$CUR" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
+say "  running:   $CUR  (version $CURV)"
+# Match kernel-default exactly; a plain 'kernel-default*' glob also matches
+# kernel-default-devel, whose version is unrelated and which uses no ESP.
+K=$(rpm -qa kernel-default --qf '%{VERSION}\n' 2>/dev/null | sort -Vu)
+say "  installed kernels: $(echo "$K" | tr '\n' ' ')"
+NEWEST=$(echo "$K" | tail -1)
+if [ "$CURV" = "$NEWEST" ]; then
+  ok "running the newest installed kernel ($CURV)"
+elif echo "$K" | grep -qx "$CURV"; then
+  warn "reboot pending: running $CURV, newest installed is $NEWEST"
+  say "    after reboot verify: tiled 5K output, audio, then GPU OpenCL"
+else
+  warn "running $CURV is not among installed: $(echo "$K" | tr '\n' ' ')"
+fi
+if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
+  ok "constraint file present (holds kernel-default at 7.2.2-1.1)"
+fi
+
+#------------------------------------------------------------------- ESP space
+say ""; say "[esp]"
+AVAIL=$(df -m --output=avail /boot/efi 2>/dev/null | tail -1 | tr -d ' ')
+say "  free: ${AVAIL}M on /boot/efi"
+OLD=$(ls -1 /boot/efi/loader/entries/ 2>/dev/null | grep -cE 'opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$')
+say "  old snapper BLS entries: $OLD"
+if [ "${AVAIL:-0}" -lt 60 ]; then
+  warn "too tight for a kernel update; prune first:"
+  say "    sudo rm -f /boot/efi/loader/entries/opensuse-slowroll-*-{70..99}.conf"
+elif [ "${AVAIL:-0}" -lt 100 ]; then
+  warn "tight; a kernel update may fail"
+else
+  ok "room for a kernel update"
+fi
+
+#------------------------------------------------------------- OpenCL / rusticl
+say ""; say "[opencl - the fragile part]"
+if sel opencl; then
+  ICD=/etc/OpenCL/vendors/rusticl.icd
+  LIB=$(find /var/lib/flatpak/runtime -name 'libRusticlOpenCL.so.1' 2>/dev/null | head -1)
+  if [ -z "$LIB" ]; then
+    bad "no rusticl driver anywhere under /var/lib/flatpak/runtime"
+    hint "flatpak install org.freedesktop.Platform.GL//25.08   # or any GL-using app"
+  else
+    LIBDIR=$(dirname "$LIB")
+    CUR_ICD=$(cat "$ICD" 2>/dev/null)
+    if [ "$CUR_ICD" = "$LIB" ]; then
+      ok "rusticl ICD current"
+    else
+      say "  ICD needs repointing:"
+      say "    was: ${CUR_ICD:-(missing)}"
+      say "    now: $LIB"
+      if can opencl; then
+        mkdir -p /etc/OpenCL/vendors
+        printf '%s\n' "$LIB" > "$ICD"
+        ok "ICD repointed"
+      fi
+    fi
+  LDC=$(command -v ldconfig 2>/dev/null)
+  [ -x "$LDC" ] || for c in /usr/sbin/ldconfig /sbin/ldconfig /usr/bin/ldconfig; do
+    [ -x "$c" ] && { LDC=$c; break; }; done
+  [ -x "$LDC" ] || LDC=ldconfig
+    if grep -qF "$LIBDIR" /etc/ld.so.conf.d/zz-rusticl-runtime.conf 2>/dev/null; then
+      ok "ld.so.conf current"
+    elif can opencl; then
+      printf '# Mesa rusticl OpenCL driver (freedesktop GL runtime)\n%s\n' "$LIBDIR" \
+        > /etc/ld.so.conf.d/zz-rusticl-runtime.conf
+      "$LDC"; ok "ld.so.conf updated"
+    else
+      warn "ld.so.conf missing the runtime lib dir"
+    fi
+    # rusticl looks for libclc bitcode at a hardcoded *Debian* path.
+    CLCD=/usr/lib/x86_64-linux-gnu/GL/default/share/clc
+    if [ -f "$CLCD/spirv-mesa3d-.spv" ]; then
+      ok "libclc bitcode present"
+    elif [ -f /usr/share/clc/spirv-mesa3d-.spv ]; then
+      if can opencl; then
+        mkdir -p "$CLCD"; cp -f /usr/share/clc/spirv*-mesa3d-.spv "$CLCD/"
+        ok "libclc bitcode staged at the hardcoded path"
+      else warn "libclc bitcode needs staging"
+      fi
+    else
+      bad "libclc bitcode missing"
+      hint "zypper install libclc"
+    fi
+  fi
+  if command -v clinfo >/dev/null; then
+    NGPU=$(clinfo 2>/dev/null | grep -cE "Device Type +GPU")
+    if [ "${NGPU:-0}" -ge 1 ]; then
+      ok "GPU OpenCL present"
+      clinfo 2>/dev/null | grep -E "Device Name|Device Type|Max compute" | head -3 | sed 's/^/    /'
+    else
+      warn "no GPU OpenCL device; Resolve will use CPU"
+    fi
+  fi
+fi
+
+#------------------------------------------------------------------------ audio
+say ""; say "[audio]"
+A=/home/ilya/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
+if [ -f "$A" ]; then
+  U=$(grep -c 'Mult" = 1\.0' "$A")
+  if [ "$U" = "6" ]; then ok "6/6 linear stages at unity gain"
+  else warn "$U/6 linear stages at unity"; hint "sed -i 's/\"Mult\" = [0-9.]*/\"Mult\" = 1.0/' $A"; fi
+  say "  nodes: $(grep -c 'type = builtin' "$A")"
+  if [ "$CHECK" -eq 0 ]; then
+    V=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
+    [ -n "$V" ] && say "  sink: $V"
+    case "$V" in *MUTED*) warn "sink is MUTED - unmute before judging audio" ;; esac
+  fi
+else
+  bad "audio chain missing: $A"
+fi
+
+#------------------------------------------------------------------------- SDDM
+say ""; say "[sddm greeter]"
+# The greeter is fixed by a DPI-deriving DisplayCommand wrapper, NOT by
+# QT_SCALE_FACTOR: the greeter runs on Xorg at 96 DPI on a 5K panel.
+SDW=/usr/local/lib/sddm/greeter-xsetup.sh
+SDC=/etc/sddm.conf.d/50-greeter-dpi.conf
+if [ -x "$SDW" ] && grep -q "$SDW" "$SDC" 2>/dev/null; then
+  ok "greeter DPI wrapper wired in ($SDC)"
+elif [ -f "$SDC" ]; then
+  warn "$SDC exists but does not reference $SDW"
+  hint "check DisplayCommand in $SDC"
+else
+  bad "greeter DPI config missing"
+  hint "restore /etc/sddm.conf.d/50-greeter-dpi.conf and $SDW"
+fi
+[ -x "$SDW" ] || warn "wrapper $SDW missing or not executable"
+say "  applies at next login (never restart sddm mid-session)"
+
+#--------------------------------------------------------------------- resolve
+say ""; say "[resolve]"
+if [ -d /opt/resolve ]; then
+  ok "installed"
+  [ -x /usr/local/bin/resolve-200 ] && ok "200% wrapper present" || warn "wrapper missing"
+  # Resolve is Qt 5.15 under XWayland: QT_SCALE_FACTOR is ignored for widget
+  # geometry unless high-DPI scaling is explicitly enabled. Check both the
+  # wrapper and the desktop entry (which now carries the vars inline).
+  DE=/usr/share/applications/com.blackmagicdesign.resolve.desktop
+  # strip only the leading "Exec=" - the value itself contains '=' characters
+  EXEC=$(sed -n 's/^Exec=//p' "$DE" 2>/dev/null | head -1)
+  if printf '%s' "$EXEC" | grep -q "QT_ENABLE_HIGHDPI_SCALING=1" \
+     && printf '%s' "$EXEC" | grep -q "QT_SCALE_FACTOR=2"; then
+    ok "desktop entry carries the Qt5 high-DPI vars"
+  elif printf '%s' "$EXEC" | grep -q "resolve-200"; then
+    ok "desktop entry uses the scaled wrapper"
+  else
+    warn "desktop entry launches unscaled"
+    hint "Exec should set QT_ENABLE_HIGHDPI_SCALING=1 and QT_SCALE_FACTOR=2"
+  fi
+  if [ -x /usr/local/bin/resolve-200 ] \
+     && ! grep -q QT_ENABLE_HIGHDPI_SCALING /usr/local/bin/resolve-200; then
+    warn "wrapper lacks QT_ENABLE_HIGHDPI_SCALING=1 - Resolve will stay 100%"
+  fi
+  # Resolve bundles its own APR, but the installer check needs the sonames.
+  # Use absolute paths: sudo -S sessions can have a minimal PATH.
+  LDC=$(command -v ldconfig 2>/dev/null)
+  [ -x "$LDC" ] || for c in /usr/sbin/ldconfig /sbin/ldconfig /usr/bin/ldconfig; do
+    [ -x "$c" ] && { LDC=$c; break; }; done
+  [ -x "$LDC" ] || LDC=ldconfig
+  # Read the cache once. `grep -q` in a pipeline under `set -o pipefail`
+  # returns 141 (SIGPIPE) even on a match, so avoid -q and test the output.
+  CACHE_OUT=$("$LDC" -p 2>/dev/null || true)
+  for so in libapr-1 libaprutil-1; do
+    # match the soname field exactly (tab + name + space) so libapr-1
+    # cannot accidentally match libaprutil-1
+    HIT=$(printf '%s\n' "$CACHE_OUT" | grep -E "	${so}\.so\.0 " || true)
+    if [ -n "$HIT" ]; then
+      ok "$so.so.0 -> ${HIT##*=> }"
+    elif [ -e "/usr/local/lib/$so.so.0" ]; then
+      warn "$so.so.0 on disk but not in ld.so.cache - run: $LDC"
+    else
+      warn "$so.so.0 missing (installer package check would fail)"
+    fi
+  done
+else
+  warn "not installed"
+fi
+
+#-------------------------------------------------------------------- plymouth
+say ""; say "[boot]"
+DEF=$(awk '/^default[[:space:]]/{print $2; exit}' /boot/efi/loader/loader.conf 2>/dev/null)
+TMO=$(awk '/^timeout[[:space:]]/{print $2; exit}' /boot/efi/loader/loader.conf 2>/dev/null)
+say "  default: ${DEF:-unset}  timeout: ${TMO:-unset}s"
+if [ -n "$DEF" ] && [ -f "/boot/efi/loader/entries/$DEF" ]; then
+  ok "default entry exists"
+  # BLS paths are ESP-relative (no /boot/efi prefix), so resolve them there.
+  miss=0
+  for p in $(awk '/^(linux|initrd)[[:space:]]/{for(i=2;i<=NF;i++) if($i ~ /^\//) print $i}' \
+             "/boot/efi/loader/entries/$DEF"); do
+    if [ -e "/boot/efi$p" ]; then say "    ok $p"
+    else warn "MISSING $p"; miss=1; fi
+  done
+  [ $miss -eq 0 ] && ok "all kernel/initrd paths resolve under /boot/efi"
+else
+  bad "default entry missing or unparsable"
+fi
+say "  theme: $(awk -F= '/^Theme/{print $2; exit}' /etc/plymouth/plymouthd.conf 2>/dev/null)"
+say "  untested: Plymouth has never rendered on the tiled 5K panel"
+
+say ""
+say "=== done; log $LOG ==="
+[ $CHECK -eq 1 ] && say "(check mode: nothing changed)"
+exit 0

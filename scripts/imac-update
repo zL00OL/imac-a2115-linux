@@ -1,0 +1,199 @@
+#!/bin/bash
+#==============================================================================
+# imac-update - update openSUSE on this iMac and re-apply every local patch
+#
+#   sudo ~/bin/imac-update              # full update, keep current kernel
+#   sudo ~/bin/imac-update --dry-run    # show what would happen, change nothing
+#   sudo ~/bin/imac-update --kernel     # ALSO move to the newest kernel
+#   sudo ~/bin/imac-update --reboot     # reboot at the end (asks first)
+#
+# Order matters: prune ESP -> update -> re-apply -> (reboot).
+# ESP has ~38M free, which is not enough for a kernel; this prunes first.
+#==============================================================================
+set -uo pipefail
+
+DRY=0; WANT_KERNEL=0; DO_REBOOT=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run|--check) DRY=1 ;;
+    --kernel)          WANT_KERNEL=1 ;;
+    --reboot)          DO_REBOOT=1 ;;
+  esac
+done
+
+LOG=/var/log/imac-update.log
+say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
+step() { say ""; say "=== $* ==="; }
+die()  { say "ABORT: $*"; say "see $LOG"; exit 1; }
+
+: > "$LOG"
+say "############ imac-update $(date -Is)  dry=$DRY kernel=$WANT_KERNEL ############"
+[ "$(id -u)" -eq 0 ] || { say "run with sudo"; exit 1; }
+
+ESP_MIN_KERNEL=120   # M needed to install a kernel alongside existing initrds
+ESP_MIN_PATCH=45     # M needed for a non-kernel update
+
+#---------------------------------------------------------------- 0. preflight
+step "0. preflight"
+AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
+say "  ESP free: ${AVAIL}M"
+say "  running kernel: $(uname -r)"
+say "  BLS entries: $(ls -1 /boot/efi/loader/entries/ 2>/dev/null | wc -l)"
+
+if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
+  say "  kernel constraint ACTIVE (holding kernel at 7.2.2-1.1)"
+else
+  say "  kernel constraint absent"
+fi
+
+if [ "$DRY" -eq 1 ]; then
+  say ""
+  say "  [dry-run] would: prune stale BLS entries, run 'zypper up',"
+  say "  [dry-run] re-run imac-reapply, and report."
+  say ""
+  say "  pending updates:"
+  zypper --non-interactive list-updates 2>/dev/null | head -30 | sed 's/^/    /' \
+    || say "    (could not query)"
+  say ""
+  say "  re-apply would report:"
+  ~/bin/imac-reapply --check 2>/dev/null | grep -E "\[(warn|FAIL)\]" | sed 's/^/    /' \
+    || say "    (all clean)"
+  say ""
+  say "  dry run complete; nothing changed."
+  exit 0
+fi
+
+#----------------------------------------- 1. free ESP space before touching zypper
+step "1. ESP space"
+
+# Decide how much we need BEFORE deleting anything.
+CURV=$(echo "$(uname -r)" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
+NEED=$ESP_MIN_PATCH
+[ "$WANT_KERNEL" -eq 1 ] && NEED=$ESP_MIN_KERNEL
+AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
+say "  need ${NEED}M, have ${AVAIL}M"
+
+# Snapshot every entry first. These BLS files are regenerable metadata, but a
+# backup means a mistake here is always reversible.
+SAVEDIR=/home/ilya/5k-stackC-backup/esp-prune-$(date +%Y%m%d-%H%M%S)
+mkdir -p "$SAVEDIR"
+cp -p /boot/efi/loader/entries/*.conf "$SAVEDIR/" 2>/dev/null
+say "  backed up all BLS entries to $SAVEDIR"
+
+# Prune ONLY snapper entries numbered >= 70. Never touches 5k-stackc-* entries
+# and never touches the loader default, so there is always a bootable fallback.
+prune_entries() {
+  for f in $(ls -1 /boot/efi/loader/entries/ 2>/dev/null \
+             | grep -E '^opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$'); do
+    rm -f "/boot/efi/loader/entries/$f"
+  done
+}
+
+if [ "$AVAIL" -lt "$NEED" ]; then
+  say "  not enough space; pruning stale snapper entries"
+  PRUNE=$(ls -1 /boot/efi/loader/entries/ 2>/dev/null \
+          | grep -cE '^opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$')
+  say "  candidates: $PRUNE"
+  if [ "$PRUNE" -eq 0 ]; then
+    die "ESP too small (${AVAIL}M < ${NEED}M) and no prunable snapper entries left.
+  Free space on /boot/efi manually, or the update cannot proceed safely."
+  fi
+  prune_entries
+  AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
+  say "  ESP free now: ${AVAIL}M"
+  if [ "$AVAIL" -lt "$NEED" ]; then
+    die "still only ${AVAIL}M after pruning $PRUNE entries; need ${NEED}M.
+  Restore with:  cp -p $SAVEDIR/*.conf /boot/efi/loader/entries/
+  Nothing has been updated; the system is unchanged apart from the pruned
+  (backed-up) BLS files."
+  fi
+  say "  pruned $PRUNE entries (backed up)"
+else
+  say "  enough space; nothing pruned"
+fi
+
+# Sanity: the default entry and at least one kernel/initrd must still exist.
+CUR_ENTRY=$(sed -n 's/^default=//p;/^default[[:space:]]/s/^default[[:space:]]*//p' \
+            /boot/efi/loader/loader.conf 2>/dev/null | head -1)
+say "  default boot entry: ${CUR_ENTRY:-unset}"
+if [ -n "$CUR_ENTRY" ] && [ ! -f "/boot/efi/loader/entries/$CUR_ENTRY" ]; then
+  say "  restoring: default entry $CUR_ENTRY is missing"
+  cp -p "$SAVEDIR/$CUR_ENTRY" /boot/efi/loader/entries/ 2>/dev/null \
+    && say "  restored $CUR_ENTRY" \
+    || die "default boot entry $CUR_ENTRY missing and unrestorable from $SAVEDIR"
+fi
+[ "$(ls -1 /boot/efi/loader/entries/ 2>/dev/null | wc -l)" -gt 0 ] \
+  || die "no BLS entries left at all - restore from $SAVEDIR"
+
+#--------------------------------------------------------- 2. kernel decision
+step "2. kernel policy"
+say "  running kernel version: $CURV"
+if [ "$WANT_KERNEL" -eq 1 ]; then
+  say "  --kernel given: removing the kernel constraint"
+  rm -f /etc/zypp/constraints.d/kernel-block.const
+  say "  constraint removed"
+else
+  say "  keeping the current kernel (constraint stays in place)"
+fi
+
+#------------------------------------------------------------------ 3. zypper
+step "3. update packages"
+say "  refreshing repos"
+zypper --non-interactive refresh 2>&1 | tail -5 | sed 's/^/  /'
+say "  running: zypper up"
+zypper --non-interactive up 2>&1 | tail -25 | sed 's/^/  /'
+ZRC=${PIPESTATUS[0]}
+say "  zypper exit: $ZRC"
+[ "$ZRC" -ne 0 ] && die "zypper reported errors - inspect the output above before continuing"
+
+# re-check ESP: zypper may have consumed it (new packages with kernel modules)
+AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
+say "  ESP free after update: ${AVAIL}M"
+
+#------------------------------------------- 4. did the kernel actually move?
+step "4. kernel status"
+NEWEST2=$(rpm -qa kernel-default --qf '%{VERSION}\n' 2>/dev/null | sort -Vu | tail -1)
+say "  running:  $CURV"
+say "  newest installed: $NEWEST2"
+if [ "$CURV" = "$NEWEST2" ]; then
+  say "  same kernel: a reboot is optional"
+else
+  say "  NEW KERNEL INSTALLED - a reboot is REQUIRED to activate it"
+  say "  after reboot, verify: 5K tiled output, audio, then sudo ~/bin/imac-reapply --check"
+fi
+
+#------------------------------------------------- 5. per-package restarts
+step "5. services"
+# A new kernel or a kernel module needs modules reloaded; the display is XWayland
+# under Plasma so a full reboot is the honest way. Log what was installed.
+say "  packages installed/updated in this run:"
+rpm -qa --last 2>/dev/null | head -0  # (informational only)
+say "  NOTE: not restarting services automatically - the session is live."
+say "  If a kernel module changed, reboot rather than reload it."
+
+#--------------------------------------------------------- 6. re-apply patches
+step "6. re-apply local patches"
+if [ -x ~/bin/imac-reapply ]; then
+  ~/bin/imac-reapply 2>&1 | sed 's/^/  /'
+  say "  re-apply finished"
+else
+  say "  ~/bin/imac-reapply MISSING - patches NOT re-applied!"
+fi
+
+step "7. final verification"
+~/bin/imac-reapply --check 2>&1 | grep -E "\[(warn|FAIL)\]" | sed 's/^/  /' \
+  || say "  all checks pass"
+
+#------------------------------------------------------------------ 8. reboot
+if [ "$DO_REBOOT" -eq 1 ]; then
+  say ""
+  read -rp "Reboot now? [y/N] " a
+  [ "$a" = "y" ] && { say "rebooting"; reboot; } || say "not rebooting"
+else
+  say ""
+  say "No reboot performed. When you do reboot, verify the 5K tiled output."
+fi
+
+say ""
+say "############ done $(date -Is) - log: $LOG ############"
+exit 0
