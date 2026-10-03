@@ -1,0 +1,278 @@
+#!/bin/bash
+#==============================================================================
+# imac-audio-module - build and install the patched CS8409 codec for a kernel
+#
+#   sudo imac-audio-module                 # newest installed kernel-default
+#   sudo imac-audio-module --kernel 7.2.2-1-default
+#   sudo imac-audio-module --check
+#   sudo imac-audio-module --uninstall
+#
+# Why this exists, and why it is NOT DKMS
+# --------------------------------------
+# The Apple CS8409 driver (jackdanyell/imac18-3-cs8409-linux-audio, v0.2) has
+# two conflicting reports on its tracker:
+#
+#   issue #2 - internal speakers WORK. Installed by hand into
+#              /lib/modules/<k>/updates/ext01/, leaving the in-tree module
+#              in place.
+#   issue #3 - no PCM device registered at all, and silent speakers.
+#              Installed via DKMS, which archives the in-tree module and
+#              installs into updates/dkms/.
+#
+# updates/ext01 sorts before updates/dkms, so a module placed there wins the
+# codec bind. DKMS cannot express that ordering, so DKMS is not used here.
+#
+# The Apple code also sits behind two compile-time guards, APPLE_CODECS and
+# APPLE_PINSENSE_FIXUP. Without them the module builds cleanly and loads, but
+# the amplifier/pin handling is compiled out - so it must never be built with
+# plain KCFLAGS (that also forces a full kernel rebuild). The defines are added
+# to the cirrus Makefile instead, which rebuilds only that directory.
+#
+# Caveat: the module is unsigned. This iMac has no Secure Boot, so it loads
+# and merely taints the kernel.
+#==============================================================================
+set -uo pipefail
+
+LOG=/var/log/imac-audio-module.log
+say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
+ok()   { say "  [ ok ] $*"; }
+bad()  { say "  [FAIL] $*"; }
+warn() { say "  [warn] $*"; }
+hint() { say "    fix:  $*"; }
+die()  { say "ABORT: $*"; say "see $LOG"; exit 1; }
+
+CHECK=0; UNINSTALL=0; TARGET=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check)     CHECK=1 ;;
+    --uninstall) UNINSTALL=1 ;;
+    --kernel)    TARGET="${2:-}"; shift ;;
+    -h|--help)   sed -n '2,30p' "$0"; exit 0 ;;
+    *)           die "unknown argument: $1" ;;
+  esac
+  shift
+done
+
+: > "$LOG"
+say "=== imac-audio-module $(date -Is) ==="
+[ "$(id -u)" -eq 0 ] || { say "must run as root"; exit 1; }
+
+# Kernel versions must be the full module-directory form (7.2.2-1-default).
+# rpm's %{VERSION} is only the upstream part (7.2.2) and the release does not
+# map cleanly onto the module directory suffix, so comparing against it makes a
+# newly installed kernel look identical to the running one - which would hide a
+# pending reboot. Read the BLS "version" field instead (1@7.2.2-1-default),
+# falling back to the directory of the "linux" path, then to /lib/modules.
+# Entries whose kernel directory no longer exists are stale and are dropped.
+installed_kernels() {
+  local out v
+  out=$(awk '/^version[[:space:]]/ { v=$2; sub(/^[^@]*@/, "", v); if (v != "") print v }' \
+         /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+  if [ -z "$out" ]; then
+    out=$(awk '/^linux[[:space:]]/ { for (i=2;i<=NF;i++) if ($i ~ /^\//) { n=split($i,a,"/"); print a[n-1] } }' \
+           /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+  fi
+  if [ -n "$out" ]; then
+    for v in $out; do [ -d "/lib/modules/$v" ] && printf '%s\n' "$v"; done
+  else
+    ls -1 /lib/modules 2>/dev/null | sort -V
+  fi
+}
+
+RUNNING=$(uname -r)
+NEWEST=$(installed_kernels | tail -1)
+[ -n "$TARGET" ] || TARGET="$NEWEST"
+say "  installed kernels: $(installed_kernels | tr '\n' ' ')"
+say "  running kernel:    $RUNNING"
+say "  newest installed:  $NEWEST"
+say "  target kernel:     $TARGET"
+[ -n "$TARGET" ] || die "cannot determine a kernel version (no BLS entries and no /lib/modules)"
+
+DEST="/lib/modules/$TARGET/updates/ext01"
+KO=snd-hda-codec-cs8409.ko
+
+# Where the Apple patches and extra headers come from.
+SRC=""
+for c in /usr/src/snd_hda_macbookpro-0.2 /usr/src/snd_hda_macbookpro-*; do
+  [ -d "$c" ] && [ -f "$c/patch_cs8409.c.diff" ] && { SRC="$c"; break; }
+done
+[ -n "$SRC" ] || die "driver source not found in /usr/src (expected snd_hda_macbookpro-0.2).
+  Install it from https://github.com/jackdanyell/imac18-3-cs8409-linux-audio"
+
+#--------------------------------------------------------------- DKMS must not compete
+if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
+  if [ "$UNINSTALL" -eq 1 ]; then :; else
+    warn "a DKMS registration for this codec exists - it can win the codec bind."
+    hint "sudo dkms remove snd_hda_macbookpro/0.2 --all"
+    [ "$CHECK" -eq 0 ] && say "  (not removed automatically; run the fix above)"
+  fi
+fi
+
+#----------------------------------------------------------------------- uninstall path
+if [ "$UNINSTALL" -eq 1 ]; then
+  say ""; say "-- uninstall --"
+  rm -f "$DEST/$KO" "$DEST/$KO.zst"
+  rmdir "$DEST" 2>/dev/null
+  depmod -a "$TARGET" 2>/dev/null || depmod -a
+  ok "removed $DEST/$KO"
+  say "  the in-tree module is now used again"
+  exit 0
+fi
+
+#--------------------------------------------------------------------- check mode
+if [ "$CHECK" -eq 1 ]; then
+  say ""; say "-- check --"
+  if [ -f "$DEST/$KO" ] || [ -f "$DEST/$KO.zst" ]; then
+    ok "ext01 module present for $TARGET"
+  else
+    warn "no ext01 module for $TARGET - speakers will be silent after booting it"
+  fi
+  RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
+  say "  modinfo resolves to: ${RESOLVED:-unknown}"
+  case "$RESOLVED" in
+    */updates/ext01/*) ok "ext01 wins module ordering" ;;
+    "")                bad "no module found at all" ;;
+    *)                 warn "the in-tree/DKMS module wins, not ext01" ;;
+  esac
+  if [ "$TARGET" = "$RUNNING" ]; then
+    say "  (target is the running kernel - a reboot is required to load it)"
+  else
+    say "  (target is NOT the running kernel; reboot into it later)"
+  fi
+  exit 0
+fi
+
+#---------------------------------------------- locate a usable kernel build tree
+say ""; say "-- locating a build tree for $TARGET --"
+# A tree directory is usually named for the upstream version only
+# (linux-7.2.2) while the module directory carries the full build
+# (7.2.2-1-default), so the name cannot be derived from the target. Glob the
+# known cache location instead and rely on the vermagic check after the build
+# to guarantee the result actually belongs to the target kernel.
+TREE=""
+for cand in "/usr/src/linux-obj-$TARGET/default" \
+            "/usr/src/linux-$TARGET" \
+            "/lib/modules/$TARGET/build" \
+            /var/cache/5kbuild/fresh/linux-*; do
+  [ -d "$cand" ] || continue
+  [ -f "$cand/sound/hda/codecs/cirrus/cs8409.c" ] || continue
+  if [ -f "$cand/.config" ] && [ -f "$cand/Module.symvers" ]; then
+    TREE="$cand"; ok "build tree: $cand"
+    break
+  fi
+  warn "skipping $cand (needs .config and Module.symvers for an in-tree build)"
+done
+[ -n "$TREE" ] || die "no prepared kernel build tree for $TARGET.
+
+  An in-tree build needs the full kernel source prepared with .config and
+  Module.symvers. Fetch and prepare it, e.g.:
+
+    zypper install kernel-devel kernel-default-devel
+    # or extract the matching source:
+    zypper download kernel-source
+    tar -C /var/cache/5kbuild/fresh -xf /var/cache/5kbuild/kernel-source-*.tar.xz
+
+  then re-run this script."
+
+CIRRUS="$TREE/sound/hda/codecs/cirrus"
+
+#------------------------------------------------------------------ patch the source
+say ""; say "-- patching source --"
+# Apply once. The backups are the source of truth for "already patched".
+if [ -f "$CIRRUS/cs8409.c.orig" ]; then
+  ok "source already patched (backups present)"
+else
+  cp "$CIRRUS/cs8409.c" "$CIRRUS/cs8409.c.orig" || die "cannot back up cs8409.c"
+  cp "$CIRRUS/cs8409.h" "$CIRRUS/cs8409.h.orig" || die "cannot back up cs8409.h"
+  # The diffs are rooted at sound/hda/, so strip a/codecs/cirrus/ from inside
+  # the cirrus directory (-p3).
+  ( cd "$CIRRUS" && patch -p3 --batch --forward < "$SRC/patch_cs8409.c.diff" ) \
+    || die "patch_cs8409.c.diff did not apply - kernel source moved on?"
+  ( cd "$CIRRUS" && patch -p3 --batch --forward < "$SRC/patch_cs8409.h.diff" ) \
+    || die "patch_cs8409.h.diff did not apply - kernel source moved on?"
+  ok "applied patch_cs8409.c.diff and patch_cs8409.h.diff"
+fi
+
+# The driver adds these headers; cs8409.c includes cirrus_apple.h directly.
+for h in "$SRC"/patch_cirrus/cirrus_apple.h "$SRC"/patch_cirrus/patch_cirrus_*.h; do
+  [ -f "$h" ] || continue
+  b=$(basename "$h")
+  [ -f "$CIRRUS/$b" ] || cp "$h" "$CIRRUS/$b" || die "cannot copy $b"
+done
+ok "driver headers in place"
+
+# The guards must be defined or the Apple code is compiled out. They go in the
+# cirrus Makefile (not KCFLAGS) so only this directory rebuilds.
+if ! grep -q APPLE_CODECS "$CIRRUS/Makefile"; then
+  [ -f "$CIRRUS/Makefile.orig" ] || cp "$CIRRUS/Makefile" "$CIRRUS/Makefile.orig"
+  printf '%s\n' 'ccflags-y += -DAPPLE_PINSENSE_FIXUP -DAPPLE_CODECS -DCONFIG_SND_HDA_RECONFIG=1 -Wno-unused-variable -Wno-unused-function' \
+    >> "$CIRRUS/Makefile" || die "cannot edit cirrus Makefile"
+  ok "added APPLE_CODECS / APPLE_PINSENSE_FIXUP to the cirrus Makefile"
+else
+  ok "Apple build flags already in the cirrus Makefile"
+fi
+
+#----------------------------------------------------------------------- build
+# `make sound/hda/codecs/cirrus/` only compiles objects; the module link happens
+# in the modules target, so build that.
+say ""; say "-- building (this can take a while) --"
+say "  tree: $TREE"
+make -C "$TREE" -j"$(nproc)" modules > /var/log/imac-audio-module-build.log 2>&1
+RC=$?
+if [ $RC -ne 0 ]; then
+  bad "build failed (rc=$RC); see /var/log/imac-audio-module-build.log"
+  tail -20 /var/log/imac-audio-module-build.log | sed 's/^/    /'
+  die "no module installed; the running kernel is unchanged"
+fi
+BUILT="$CIRRUS/$KO"
+[ -f "$BUILT" ] || die "build reported success but $BUILT is missing"
+ok "built $BUILT ($(stat -c%s "$BUILT") bytes)"
+
+# The Apple code must actually be in the binary.
+# Safety net: refuse to install a module built for a different kernel. Without
+# this a stale tree would silently produce a module that cannot load.
+VERM=$(modinfo -F vermagic "$BUILT" 2>/dev/null)
+say "  built vermagic: ${VERM:-unknown}"
+case "$VERM" in
+  *"$TARGET"*) ok "vermagic matches the target kernel" ;;
+  *) bad "vermagic does not mention $TARGET - this tree is for another kernel"
+     die "refusing to install a module that cannot load on $TARGET" ;;
+esac
+
+MARKS=$(strings "$BUILT" 2>/dev/null | grep -cE 'cs_8409|cirrus_apple|APPLE' || true)
+if [ "${MARKS:-0}" -gt 0 ]; then
+  ok "driver symbols present ($MARKS matches)"
+else
+  warn "no driver symbols found in the built module - verify it is the patched build"
+fi
+if strings "$BUILT" 2>/dev/null | grep -q 'jackdanyell\|imac18_3'; then
+  ok "jackdanyell marker present"
+fi
+
+#----------------------------------------------------------------------- install
+say ""; say "-- installing to $DEST --"
+mkdir -p "$DEST" || die "cannot create $DEST"
+install -m 0644 "$BUILT" "$DEST/$KO" || die "install failed"
+depmod -a "$TARGET" 2>/dev/null || depmod -a
+ok "installed $DEST/$KO"
+
+# Confirm ordering is actually correct.
+RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
+say "  modinfo resolves to: ${RESOLVED:-unknown}"
+case "$RESOLVED" in
+  */updates/ext01/*) ok "ext01 wins module ordering" ;;
+  *) warn "ext01 does NOT win ordering right now (resolves elsewhere)" ;;
+esac
+
+say ""
+say "  target kernel: $TARGET"
+if [ "$TARGET" = "$RUNNING" ]; then
+  say "  REBOOT REQUIRED - the running kernel still has the old module loaded."
+else
+  say "  This kernel is not running. Reboot into it to use the module."
+fi
+say "  After reboot verify:"
+say "    modinfo -n snd_hda_codec_cs8409     # expect updates/ext01"
+say "    dmesg | grep -A4 'autoconfig for CS8409'"
+say "=== done ==="
+exit 0

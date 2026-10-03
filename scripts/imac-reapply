@@ -6,9 +6,16 @@
 #   sudo ~/bin/imac-reapply --check      # report only, change nothing
 #   sudo ~/bin/imac-reapply --fix-opencl # only the fragile OpenCL part
 #
-# Why: openSUSE Slowroll updates overwrite things. GPU OpenCL in
-# particular lives inside a Flatpak runtime whose hashed path changes on
-# every runtime update, silently killing GPU compute for DaVinci Resolve.
+# Why: openSUSE Slowroll updates overwrite things, and the two fragile parts
+# are handled very differently on purpose:
+#
+#   audio - the patched CS8409 codec must be rebuilt and reinstalled for every
+#           new kernel, into updates/ext01 (not DKMS). Handled by imac-audio-module.
+#   opencl- GPU compute for Resolve lives in a Flatpak runtime whose hashed
+#           path changes on every runtime update. The ICD file is repointed
+#           here, but the linker and libclc parts are NOT automated: doing
+#           them globally broke the graphical login. See the note in the
+#           opencl section.
 #==============================================================================
 set -uo pipefail
 
@@ -40,20 +47,40 @@ say "=== imac-reapply $(date -Is)  mode=$([ $CHECK -eq 1 ] && echo check || echo
 #--------------------------------------------------------------------- kernel
 say ""; say "[kernel]"
 CUR=$(uname -r)
-CURV=$(echo "$CUR" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
-say "  running:   $CUR  (version $CURV)"
-# Match kernel-default exactly; a plain 'kernel-default*' glob also matches
-# kernel-default-devel, whose version is unrelated and which uses no ESP.
-K=$(rpm -qa kernel-default --qf '%{VERSION}\n' 2>/dev/null | sort -Vu)
-say "  installed kernels: $(echo "$K" | tr '\n' ' ')"
+# Kernel versions must be the full module-directory form (7.2.2-1-default).
+# rpm's %{VERSION} is only the upstream part (7.2.2) and the release does not
+# map cleanly onto the module directory suffix, so comparing against it makes a
+# newly installed kernel look identical to the running one - which would hide a
+# pending reboot. Read the BLS "version" field instead (1@7.2.2-1-default),
+# falling back to the directory of the "linux" path, then to /lib/modules.
+# Entries whose kernel directory no longer exists are stale and are dropped.
+installed_kernels() {
+  local out v
+  out=$(awk '/^version[[:space:]]/ { v=$2; sub(/^[^@]*@/, "", v); if (v != "") print v }' \
+         /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+  if [ -z "$out" ]; then
+    out=$(awk '/^linux[[:space:]]/ { for (i=2;i<=NF;i++) if ($i ~ /^\//) { n=split($i,a,"/"); print a[n-1] } }' \
+           /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+  fi
+  if [ -n "$out" ]; then
+    for v in $out; do [ -d "/lib/modules/$v" ] && printf '%s\n' "$v"; done
+  else
+    ls -1 /lib/modules 2>/dev/null | sort -V
+  fi
+}
+say "  running:   $CUR"
+K=$(installed_kernels)
 NEWEST=$(echo "$K" | tail -1)
-if [ "$CURV" = "$NEWEST" ]; then
-  ok "running the newest installed kernel ($CURV)"
-elif echo "$K" | grep -qx "$CURV"; then
-  warn "reboot pending: running $CURV, newest installed is $NEWEST"
-  say "    after reboot verify: tiled 5K output, audio, then GPU OpenCL"
+say "  installed kernels: $(echo "$K" | tr '\n' ' ')"
+if [ "$CUR" = "$NEWEST" ]; then
+  ok "running the newest installed kernel ($CUR)"
+elif echo "$K" | grep -qx "$CUR"; then
+  warn "REBOOT PENDING: running $CUR, newest installed is $NEWEST"
+  say "    the patched audio codec and the 5K initrd are per-kernel."
+  say "    Rebuild the codec for it first:  sudo ~/bin/imac-audio-module --kernel $NEWEST"
+  say "    After reboot verify: tiled 5K output, then audio."
 else
-  warn "running $CURV is not among installed: $(echo "$K" | tr '\n' ' ')"
+  warn "running $CUR is not among installed: $(echo "$K" | tr '\n' ' ')"
 fi
 if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
   ok "constraint file present (holds kernel-default at 7.2.2-1.1)"
@@ -75,7 +102,7 @@ else
 fi
 
 #------------------------------------------------------------- OpenCL / rusticl
-say ""; say "[opencl - the fragile part]"
+say ""; say "[opencl]"
 if sel opencl; then
   ICD=/etc/OpenCL/vendors/rusticl.icd
   LIB=$(find /var/lib/flatpak/runtime -name 'libRusticlOpenCL.so.1' 2>/dev/null | head -1)
@@ -83,7 +110,6 @@ if sel opencl; then
     bad "no rusticl driver anywhere under /var/lib/flatpak/runtime"
     hint "flatpak install org.freedesktop.Platform.GL//25.08   # or any GL-using app"
   else
-    LIBDIR=$(dirname "$LIB")
     CUR_ICD=$(cat "$ICD" 2>/dev/null)
     if [ "$CUR_ICD" = "$LIB" ]; then
       ok "rusticl ICD current"
@@ -97,33 +123,25 @@ if sel opencl; then
         ok "ICD repointed"
       fi
     fi
-  LDC=$(command -v ldconfig 2>/dev/null)
-  [ -x "$LDC" ] || for c in /usr/sbin/ldconfig /sbin/ldconfig /usr/bin/ldconfig; do
-    [ -x "$c" ] && { LDC=$c; break; }; done
-  [ -x "$LDC" ] || LDC=ldconfig
-    if grep -qF "$LIBDIR" /etc/ld.so.conf.d/zz-rusticl-runtime.conf 2>/dev/null; then
-      ok "ld.so.conf current"
-    elif can opencl; then
-      printf '# Mesa rusticl OpenCL driver (freedesktop GL runtime)\n%s\n' "$LIBDIR" \
-        > /etc/ld.so.conf.d/zz-rusticl-runtime.conf
-      "$LDC"; ok "ld.so.conf updated"
-    else
-      warn "ld.so.conf missing the runtime lib dir"
-    fi
-    # rusticl looks for libclc bitcode at a hardcoded *Debian* path.
-    CLCD=/usr/lib/x86_64-linux-gnu/GL/default/share/clc
-    if [ -f "$CLCD/spirv-mesa3d-.spv" ]; then
-      ok "libclc bitcode present"
-    elif [ -f /usr/share/clc/spirv-mesa3d-.spv ]; then
-      if can opencl; then
-        mkdir -p "$CLCD"; cp -f /usr/share/clc/spirv*-mesa3d-.spv "$CLCD/"
-        ok "libclc bitcode staged at the hardcoded path"
-      else warn "libclc bitcode needs staging"
-      fi
-    else
-      bad "libclc bitcode missing"
-      hint "zypper install libclc"
-    fi
+    # DELIBERATELY NOT AUTOMATED.
+    #
+    # An earlier version of this script made GPU OpenCL work by putting the
+    # Flatpak runtime on the *global* linker search path and by staging libclc
+    # bitcode at /usr/lib/x86_64-linux-gnu/GL/default/share/clc. Both broke the
+    # graphical login: KWin would not start because Mesa resolved to the wrong
+    # runtime. Recovery meant deleting /usr/lib/x86_64-linux-gnu/GL, removing
+    # the ld.so.conf.d drop-in and rebuilding the ld cache.
+    #
+    # A global ld.so.conf entry cannot be scoped to one application, so this
+    # script will not create one again. GPU OpenCL for Resolve has to come
+    # from a per-process wrapper, not a system-wide linker change.
+  fi
+  # Guard against the old global rusticl hack being reintroduced or left behind.
+  if [ -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf ] \
+     || [ -d /usr/lib/x86_64-linux-gnu/GL ]; then
+    bad "leftovers from the old global rusticl hack are present"
+    hint "sudo rm -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf"
+    hint "sudo rm -rf /usr/lib/x86_64-linux-gnu/GL && sudo ldconfig"
   fi
   if command -v clinfo >/dev/null; then
     NGPU=$(clinfo 2>/dev/null | grep -cE "Device Type +GPU")
@@ -138,6 +156,27 @@ fi
 
 #------------------------------------------------------------------------ audio
 say ""; say "[audio]"
+
+# --- codec module: this is what actually decides whether speakers work ---
+if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
+  bad "a DKMS registration for the CS8409 codec exists"
+  hint "sudo dkms remove snd_hda_macbookpro/0.2 --all   # DKMS cannot win module ordering"
+fi
+RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
+say "  cs8409 module: ${RESOLVED:-not found}"
+case "$RESOLVED" in
+  */updates/ext01/*) ok "patched driver active via updates/ext01" ;;
+  "")                bad "no cs8409 module found" ;;
+  *)                 warn "the in-tree module wins, not the patched updates/ext01 build"
+                     hint "sudo ~/bin/imac-audio-module" ;;
+esac
+if [ -x /home/ilya/bin/imac-audio-module ]; then
+  /home/ilya/bin/imac-audio-module --check 2>&1 | grep -E '^\s+\[(warn|FAIL|ok)\]' | sed 's/^/  /'
+else
+  warn "imac-audio-module not installed; run it after a kernel update"
+fi
+
+# --- PipeWire routing ---
 A=/home/ilya/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
 if [ -f "$A" ]; then
   U=$(grep -c 'Mult" = 1\.0' "$A")

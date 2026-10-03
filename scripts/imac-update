@@ -7,8 +7,12 @@
 #   sudo ~/bin/imac-update --kernel     # ALSO move to the newest kernel
 #   sudo ~/bin/imac-update --reboot     # reboot at the end (asks first)
 #
-# Order matters: prune ESP -> update -> re-apply -> (reboot).
-# ESP has ~38M free, which is not enough for a kernel; this prunes first.
+# Order matters: prune ESP -> update -> rebuild the audio codec for whatever
+# kernel is now newest -> re-apply -> (reboot).
+#
+# The audio step is not optional. The patched CS8409 codec is built per kernel
+# into updates/ext01 (see imac-audio-module for why DKMS is not used), so a new
+# kernel boots with no patched codec and the internal speakers are silent.
 #==============================================================================
 set -uo pipefail
 
@@ -22,9 +26,38 @@ for a in "$@"; do
 done
 
 LOG=/var/log/imac-update.log
+# This runs under sudo, so ~ is /root and not the user's home. Use an explicit
+# path or the script silently reports the helpers as missing.
+BIN=/home/ilya/bin
 say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
 step() { say ""; say "=== $* ==="; }
+ok()   { say "  [ ok ] $*"; }
+warn() { say "  [warn] $*"; }
+bad()  { say "  [FAIL] $*"; }
+hint() { say "    fix:  $*"; }
 die()  { say "ABORT: $*"; say "see $LOG"; exit 1; }
+
+# Kernel versions must be the full module-directory form (7.2.2-1-default).
+# rpm's %{VERSION} is only the upstream part (7.2.2) and the release does not
+# map cleanly onto the module directory suffix, so comparing against it makes a
+# newly installed kernel look identical to the running one - which would hide a
+# pending reboot. Read the BLS "version" field instead (1@7.2.2-1-default),
+# falling back to the directory of the "linux" path, then to /lib/modules.
+# Entries whose kernel directory no longer exists are stale and are dropped.
+installed_kernels() {
+  local out v
+  out=$(awk '/^version[[:space:]]/ { v=$2; sub(/^[^@]*@/, "", v); if (v != "") print v }' \
+         /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+  if [ -z "$out" ]; then
+    out=$(awk '/^linux[[:space:]]/ { for (i=2;i<=NF;i++) if ($i ~ /^\//) { n=split($i,a,"/"); print a[n-1] } }' \
+           /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+  fi
+  if [ -n "$out" ]; then
+    for v in $out; do [ -d "/lib/modules/$v" ] && printf '%s\n' "$v"; done
+  else
+    ls -1 /lib/modules 2>/dev/null | sort -V
+  fi
+}
 
 : > "$LOG"
 say "############ imac-update $(date -Is)  dry=$DRY kernel=$WANT_KERNEL ############"
@@ -49,14 +82,19 @@ fi
 if [ "$DRY" -eq 1 ]; then
   say ""
   say "  [dry-run] would: prune stale BLS entries, run 'zypper up',"
+  say "  [dry-run] rebuild the audio codec for the newest kernel,"
   say "  [dry-run] re-run imac-reapply, and report."
+  say ""
+  say "  audio codec status for the newest kernel:"
+  "$BIN/imac-audio-module" --check 2>/dev/null | grep -E '\[(warn|FAIL|ok)\]' | sed 's/^/    /' \
+    || say "    (imac-audio-module not installed)"
   say ""
   say "  pending updates:"
   zypper --non-interactive list-updates 2>/dev/null | head -30 | sed 's/^/    /' \
     || say "    (could not query)"
   say ""
   say "  re-apply would report:"
-  ~/bin/imac-reapply --check 2>/dev/null | grep -E "\[(warn|FAIL)\]" | sed 's/^/    /' \
+  "$BIN/imac-reapply" --check 2>/dev/null | grep -E "\[(warn|FAIL)\]" | sed 's/^/    /' \
     || say "    (all clean)"
   say ""
   say "  dry run complete; nothing changed."
@@ -67,7 +105,7 @@ fi
 step "1. ESP space"
 
 # Decide how much we need BEFORE deleting anything.
-CURV=$(echo "$(uname -r)" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
+CURV=$(uname -r)
 NEED=$ESP_MIN_PATCH
 [ "$WANT_KERNEL" -eq 1 ] && NEED=$ESP_MIN_KERNEL
 AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
@@ -152,14 +190,38 @@ say "  ESP free after update: ${AVAIL}M"
 
 #------------------------------------------- 4. did the kernel actually move?
 step "4. kernel status"
-NEWEST2=$(rpm -qa kernel-default --qf '%{VERSION}\n' 2>/dev/null | sort -Vu | tail -1)
+NEWEST2=$(installed_kernels | tail -1)
 say "  running:  $CURV"
 say "  newest installed: $NEWEST2"
+say "  installed: $(installed_kernels | tr '\n' ' ')"
 if [ "$CURV" = "$NEWEST2" ]; then
   say "  same kernel: a reboot is optional"
 else
   say "  NEW KERNEL INSTALLED - a reboot is REQUIRED to activate it"
   say "  after reboot, verify: 5K tiled output, audio, then sudo ~/bin/imac-reapply --check"
+fi
+
+#------------------------------- 4b. rebuild the audio codec for the new kernel
+# The patched CS8409 codec lives in updates/ext01 and is per-kernel. A new
+# kernel has no copy, so it must be rebuilt and installed or the speakers go
+# silent after the reboot. This has to happen for the kernel that will be
+# booted, not the one currently running.
+step "4b. audio codec module for kernel $NEWEST2"
+AM="$BIN/imac-audio-module"
+if [ -x "$AM" ]; then
+  if [ "$CURV" = "$NEWEST2" ]; then
+    say "  kernel unchanged; ensuring the module is present anyway"
+  fi
+  "$AM" --kernel "$NEWEST2" 2>&1 | sed 's/^/  /'
+  ARC=${PIPESTATUS[0]}
+  if [ "$ARC" -ne 0 ]; then
+    warn "the audio module could not be built for $NEWEST2 (rc=$ARC)"
+    warn "the speakers WILL be silent after rebooting into it"
+    say "  see /var/log/imac-audio-module.log"
+  fi
+else
+  bad "$AM missing - the audio codec will NOT be rebuilt for the new kernel"
+  hint "install scripts/imac-audio-module as ~/bin/imac-audio-module"
 fi
 
 #------------------------------------------------- 5. per-package restarts
@@ -173,15 +235,15 @@ say "  If a kernel module changed, reboot rather than reload it."
 
 #--------------------------------------------------------- 6. re-apply patches
 step "6. re-apply local patches"
-if [ -x ~/bin/imac-reapply ]; then
-  ~/bin/imac-reapply 2>&1 | sed 's/^/  /'
+if [ -x "$BIN/imac-reapply" ]; then
+  "$BIN/imac-reapply" 2>&1 | sed 's/^/  /'
   say "  re-apply finished"
 else
-  say "  ~/bin/imac-reapply MISSING - patches NOT re-applied!"
+  say "  $BIN/imac-reapply MISSING - patches NOT re-applied!"
 fi
 
 step "7. final verification"
-~/bin/imac-reapply --check 2>&1 | grep -E "\[(warn|FAIL)\]" | sed 's/^/  /' \
+"$BIN/imac-reapply" --check 2>&1 | grep -E "\[(warn|FAIL)\]" | sed 's/^/  /' \
   || say "  all checks pass"
 
 #------------------------------------------------------------------ 8. reboot
