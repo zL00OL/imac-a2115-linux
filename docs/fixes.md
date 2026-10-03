@@ -23,39 +23,11 @@ openSUSE ships **no OpenCL driver at all**. `Mesa-dri` contains the DRI drivers
 
 DaVinci Resolve therefore sees no GPU compute.
 
-### What was done
+### What was tried — it worked, then broke the graphical login, and was reverted
 
-The freedesktop **Flatpak GL runtime** already on the machine ships a complete
-Mesa 26.2.2 rusticl driver — the *exact same Mesa version* as the system
-`Mesa-dri`. Three pieces were needed:
-
-1. **Register the ICD** so the loader finds the driver:
-   ```bash
-   # /etc/OpenCL/vendors/rusticl.icd
-   /var/lib/flatpak/runtime/org.freedesktop.Platform.GL/x86_64/25.08/<hash>/files/lib/libRusticlOpenCL.so.1
-   ```
-
-2. **Provide `libLLVMSPIRVLib.so.21.1`**, which the driver needs but the system
-   does not have (system has LLVM 23; the driver needs LLVM 21):
-   ```bash
-   # /etc/ld.so.conf.d/zz-rusticl-runtime.conf
-   /var/lib/flatpak/runtime/org.freedesktop.Platform.GL/x86_64/25.08/<hash>/files/lib
-   ```
-   Then `ldconfig`.
-
-3. **Stage the libclc SPIR-V bitcode.** rusticl has a **hardcoded Debian path**
-   baked into the driver build:
-   ```
-   /usr/lib/x86_64-linux-gnu/GL/default/share/clc/spirv-mesa3d-.spv
-   ```
-   openSUSE puts these in `/usr/share/clc`. Copy them to the hardcoded path:
-   ```bash
-   sudo mkdir -p /usr/lib/x86_64-linux-gnu/GL/default/share/clc
-   sudo cp /usr/share/clc/spirv*-mesa3d-.spv /usr/lib/x86_64-linux-gnu/GL/default/share/clc/
-   ```
-   (Requires `zypper install libclc`.)
-
-Result:
+The freedesktop **Flatpak GL runtime** on this machine ships a complete Mesa
+rusticl driver (the same Mesa version as the system `Mesa-dri`). Pointing the
+ICD at it did produce a working GPU device:
 
 ```
 Platform #0: rusticl
@@ -63,14 +35,42 @@ Platform #0: rusticl
     Device Type: GPU | 28 compute units | OpenCL 3.1
 ```
 
-### Why this is fragile
+But making it work needed two further changes, and **both of them broke the
+desktop**:
 
-The Flatpak runtime path contains a **content hash** that changes on every
-runtime update. When it moves, the ICD points at nothing and GPU compute dies
-**silently** — no error, apps just fall back to CPU.
+| Step | What it did | Consequence |
+|---|---|---|
+| Add the runtime lib dir to `/etc/ld.so.conf.d/zz-rusticl-runtime.conf` | supplied `libLLVMSPIRVLib.so.21.1` (the driver needs LLVM 21; the system has LLVM 23) | put Flatpak runtime Mesa on the **global** linker path |
+| Create `/usr/lib/x86_64-linux-gnu/GL/default/share/clc/` | staged libclc bitcode that rusticl looks for at a hardcoded **Debian** path | created a system GL directory that shadowed the real one |
 
-`scripts/imac-reapply` re-resolves the path, so run it after updates. That is
-the single most important thing it does.
+**KWin then failed to start and the machine would not reach a graphical login.**
+Recovery was: delete `/usr/lib/x86_64-linux-gnu/GL`, remove the
+`ld.so.conf.d` drop-in, `ldconfig`, reboot.
+
+### Current state: REVERTED, and not to be re-applied
+
+Both artefacts are removed. GPU OpenCL is **absent**; Resolve sees CPU only and
+will not run.
+
+`scripts/imac-reapply` used to perform both of these automatically. That code
+has been **deleted** and replaced with a guard that *reports* the leftovers if
+they ever reappear. A global `ld.so.conf` entry cannot be scoped to one
+application, so this is not fixable by being more careful — it needs a
+per-process wrapper (environment variables in a Resolve launcher) or a cleanly
+packaged system rusticl, which openSUSE does not currently provide.
+
+### The one legitimate part
+
+Registering the ICD alone is harmless and is still worth doing:
+
+```bash
+# /etc/OpenCL/vendors/rusticl.icd
+/var/lib/flatpak/runtime/org.freedesktop.Platform.GL/x86_64/25.08/<hash>/files/lib/libRusticlOpenCL.so.1
+```
+
+`imac-reapply` re-resolves this path, because it contains a content hash that
+changes on every runtime update and fails silently. Expect **no** GPU device
+until the loader dependency and bitcode are solved properly.
 
 ### A better fix on other distros
 
@@ -160,77 +160,133 @@ next login** — never restart sddm mid-session.
 
 ---
 
-## Audio — partially resolved, still wrong
+## Audio — UNRESOLVED (speaker path is not working)
 
-Original symptom: near-silent speakers.
+**Read this section before changing anything.** The earlier diagnosis in this
+file was wrong. It blamed gain staging and a missing limiter; both were
+red herrings. The real problem is the codec driver, and the symptom changed
+during investigation.
 
-Diagnosis: not a routing fault. Extreme attenuation — hardware `Master` at
-**3%** plus software losses totalling roughly 55 dB. The six linear
-`preamp`/`gate`/`gate`/`lowpass` stages in the PipeWire chain were at
-0.56–1.0 gains; set to unity, and ALSA `Master`/`Speaker`/`PCM` raised to 100%.
+### Current symptom
 
-**Current state: distorted and compressed at every volume level, and no sound
-below ~15%.**
+- **Rear pair works. Front pair is silent.** No setting in PipeWire, WirePlumber
+  or ALSA changes this.
+- ALSA reports `line_outs=2 (0x24/0x25) type:speaker`, `speaker_outs=0`,
+  `hp_outs=1`. The `speaker_outs=0` is a naming artifact — the outputs are
+  classified as line outputs with type speaker — and is **not** by itself proof
+  of dead hardware.
+- The driver documentation states the CS8409 DAC needs **4 channels, 44.1 kHz,
+  S24_3LE**. A 4-channel sink (`Built-in Audio Analog Surround 4.0`) does
+  appear, so the format is reachable.
 
-That signature is **not** clipping — clipping scales with level. Constant
-distortion across levels plus a hard low-volume cutoff points at a
-**misconfigured limiter/compressor** or a codec/amp effect, most likely the
-Cirrus Logic **CS8409** speaker DSP exposed through ALSA.
+### The codec driver: what is actually known
 
-### Most likely cause found: a boosted low shelf with no limiter
+The machine is an **iMac19,1 / A2115**. The driver that everyone points to,
+[`jackdanyell/imac18-3-cs8409-linux-audio`](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio),
+is written for the **iMac18,3** and its installer refuses any other model by
+design. It has still never produced working front speakers here.
 
-`ahmadtv/omarchy-imac18-3` documents **this exact failure** on the sibling
-iMac18,3, and its analysis fits our symptom precisely:
+Its own issue tracker contains two results that contradict each other, and the
+difference is the whole story:
 
-> "The CS8409/CS42L83 codec applies no DSP on Linux, so this supplies the voicing
-> macOS does in software: lift the low end the small sealed cabinets cannot
-> produce... The limiter replaces a hard clamp used earlier. With a **+7 dB low
-> shelf**, bass transients on a loud master **exceed full scale**, and a clamp
-> resolves that by **clipping** them. The limiter resolves it by **lookahead gain
-> reduction** instead, which is the same protection without the distortion."
+| Report | Install method | Result |
+|---|---|---|
+| issue #2 | module installed by hand into `/lib/modules/<k>/updates/ext01/` | **internal speakers worked** |
+| issue #3 | installed via **DKMS** | no PCM device at all; speakers silent |
 
-So the chain almost certainly does what macOS does — a **low-shelf boost** — and
-with no limiter after it, boosted bass transients **clip**. Combined with raising
-ALSA `Master` to 100%, that produces exactly what we hear: loud and squashed at
-every level.
+`updates/ext01` sorts **before** `updates/dkms`, so a module placed there wins
+the codec bind. **DKMS cannot express that ordering**, which is why it fails.
+`scripts/imac-audio-module` therefore builds and installs into `ext01` and never
+uses DKMS for this codec.
 
-Their fix: an **LSP lookahead limiter** as the final node, input gain at unity.
-Critically, they note input gain should be left at unity and bass trimmed instead
-of raising the threshold, or the bass audibly pumps.
+### Two build traps, both hit here
 
-Two further cautions from that project:
-- Their limiter was configured **stereo, with channels explicitly wired**. A mono
-  graph limits each side independently and **shifts the stereo image** on bass
-  transients.
-- The limiter needs `lsp-plugins-lv2`.
+1. **The Apple code is behind compile-time guards.** `APPLE_CODECS` and
+   `APPLE_PINSENSE_FIXUP` gate the amplifier and pin handling. Build without
+   them and the module compiles, loads, and silently contains no Apple support.
+   Pass them via the cirrus `Makefile` (`ccflags-y`), **not** `KCFLAGS` — global
+   `KCFLAGS` dirties the whole tree and forces a full kernel rebuild.
 
-Run `scripts/check-igpu.sh` (section 8) to see whether a bass shelf or any
-limiter is present in our chain.
-
-### Remaining untested hypotheses
-
-1. ALSA "Smart Volume" / speaker-boost / limiter control — check
-   `amixer -c0 contents`.
-2. Bypassing PipeWire entirely:
-   ```bash
-   speaker-test -D hw:0,0 -c2 -t sine -f 440 -l1
-   mv ~/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf{,.disabled}
-   systemctl --user restart pipewire wireplumber
+2. **A module built from a mismatched tree will not load at all.** Building from
+   a self-fetched kernel source produced:
    ```
-   Clean raw output ⇒ the chain is at fault. Distorted raw ⇒ codec/amp/driver.
+   snd_hda_codec_cs8409: disagrees about version of symbol module_layout
+   ```
+   `vermagic` matched, so a vermagic check does **not** catch this. The real
+   discriminator is the `module_layout` CRC:
 
-**Do not run `generate-filter-chain.py`** — it still emits the attenuated
-values and would silently revert the unity-gain fix.
+   | Tree | `module_layout` CRC |
+   |---|---|
+   | `/usr/src/linux-7.2.2-1-obj/x86_64/default` (correct) | `0xbb7f52aa` |
+   | self-fetched `linux-7.2.2` source (wrong `.config`) | `0x60b44b0b` |
 
----
+   Always build against `/lib/modules/$(uname -r)/build`.
 
-## Plymouth
+**Status: front speakers still silent. No working fix is known.**
 
-Configured (`Theme=linux-penguin`, a custom `initrd-stackC-ply` with 216
-Plymouth entries, set as the default boot entry with two non-Plymouth
-fallbacks). All paths verified to resolve.
+### If you experiment
 
-**Never observed rendering.** Earlier attempts produced no stitched image. On
-the tiled panel this may simply be unsupportable, since Plymouth runs before the
-tiling mode is established. Consider dropping it — it adds risk (a large
-initramfs on a 197M ESP) for no confirmed benefit.
+- Keep a known-good fallback. The PipeWire chain in
+  `~/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf` is not the cause;
+  do not spend time there.
+- Check `modinfo -n snd_hda_codec_cs8409` resolves to `updates/ext01`, then
+  `dmesg | grep -A4 'autoconfig for CS8409'`. A working machine logs
+  `Primary patch_cs8409 NOT FOUND trying APPLE` and a PCM named
+  `CS8409/CS42L83 Analog`. If you instead see `Cirrus Logic Generic`, the codec
+  has fallen back to the generic driver and the patched path is not active.
+- The external Behringer UMC204HD works and is unaffected by any of this.
+
+## Plymouth — SUSPECTED OF BREAKING BOOT, remove from the default path
+
+Configured as `Theme=linux-penguin` with a custom `initrd-stackC-ply` (216
+Plymouth entries), and set as the **default** boot entry in
+`/boot/efi/loader/loader.conf`.
+
+**Never once observed rendering.** Earlier attempts produced no stitched image.
+
+### It has now cost physical access to the machine
+
+On 2026-10-03 the machine was rebooted with `5k-stackc-plymouth.conf` as the
+default entry. It **never came back**: no network, no Tailscale presence, and
+no IP address at all, which means the boot stalled **before** NetworkManager —
+i.e. inside the initramfs, not at the display server.
+
+The suspect line is the initramfs itself:
+
+```
+initrd   /opensuse-slowroll/7.2.2-1-default/initrd-stackC-ply
+options  ... rd.plymouth=1 plymouth.ignore-serial-consoles ...
+```
+
+**This is a hypothesis, not a confirmed diagnosis** — the error text on screen
+was never captured. But it is enough to justify acting:
+
+> **Do not boot `5k-stackc-plymouth.conf` by default.** This machine is often
+> unattended, and a boot that hangs before the network is unrecoverable without
+> physical access.
+
+### Recovery
+
+Force off (hold the power button ~10 s), power on, press `Esc`, and pick:
+
+```
+openSUSE Tumbleweed-Slowroll 20260901 (safe fallback, no Plymouth)
+```
+
+Same kernel, plain `initrd-stackC`, no `rd.plymouth=1`. If it boots the
+Plymouth default and hangs again, force-cycle and choose the fallback rather
+than retrying the default.
+
+### Known display flakiness
+
+Independently of Plymouth, this machine **intermittently fails to initialise
+the 5K panel on boot** and shows a full-brightness error message for hours. A
+power cycle fixes it. That predates any Plymouth work here and is a separate
+issue.
+
+### Decision
+
+Plymouth adds risk — a large initramfs on a 197M ESP with 38M free — for
+**zero confirmed benefit** on this panel. Recommendation: drop it from the boot
+path entirely and remove `initrd-stackC-ply`. If the splash is ever wanted
+again, prove it renders first, and never as the default entry.

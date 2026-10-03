@@ -71,7 +71,8 @@ before changing anything.
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
 | `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
-| `scripts/imac-update` | update the distro, then re-apply |
+| `scripts/imac-audio-module` | build/install the patched CS8409 codec for a kernel (never DKMS) |
+| `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
 | `THIRD_PARTY_NOTICES.md` | credits for every upstream project relied on |
 
 ## Credits
@@ -100,5 +101,17 @@ AMD graphics team.
 visible gap or displacement across the midline. Achieved with the **stock**
 `amdgpu` driver plus `amdgpu.tiled_stitch=1`. No patched driver required.
 
-Everything else — GPU OpenCL, DaVinci Resolve, audio, Plymouth — is documented but
-optional, and some of it is still unresolved.
+Everything else is documented but **unresolved or actively harmful as configured**:
+
+- **Audio: broken.** Rear pair works, front pair silent. The widely-recommended
+  CS8409 driver is written for the iMac18,3; this machine is an iMac19,1. See
+  the audio section of `docs/fixes.md` before changing anything — the earlier
+  diagnosis in that file was wrong.
+- **Plymouth: suspected of hanging the boot.** It has never once rendered on
+  this panel, and a boot through `initrd-stackC-ply` stalled before the network
+  came up, which on an unattended machine means physical access to recover.
+  **Do not make `5k-stackc-plymouth.conf` the default entry.**
+- **GPU OpenCL: absent.** The workaround that briefly worked broke the
+  graphical login and has been reverted; the code that performed it is deleted.
+
+`docs/fixes.md` records what is broken as carefully as what works.
