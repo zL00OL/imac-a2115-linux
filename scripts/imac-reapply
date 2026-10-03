@@ -157,6 +157,21 @@ fi
 #------------------------------------------------------------------------ audio
 say ""; say "[audio]"
 
+# --- HDA runtime power management: the documented cause of total silence ---
+# Ref davidjo/snd_hda_macbookpro#209 (iMac19,1) and #217. When the controller
+# runtime-suspends, the CS8409's I2C bridge loses power and the CS42L83 /
+# TAS5764L amplifiers can never be programmed. Nothing errors; you just get no
+# sound at any volume.
+PS=$(cat /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null)
+PSC=$(cat /sys/module/snd_hda_intel/parameters/power_save_controller 2>/dev/null)
+say "  snd_hda_intel power_save=${PS:-?} power_save_controller=${PSC:-?}"
+if [ "$PS" = "N" ] && [ "$PSC" = "N" ]; then
+  ok "HDA runtime power management disabled"
+else
+  bad "HDA runtime power management is ENABLED - internal speakers may be silent"
+  hint "sudo ~/bin/imac-audio-fix   # writes /etc/modprobe.d/99-imac-audio.conf"
+fi
+
 # --- codec module: this is what actually decides whether speakers work ---
 if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
   bad "a DKMS registration for the CS8409 codec exists"

@@ -160,81 +160,128 @@ next login** — never restart sddm mid-session.
 
 ---
 
-## Audio — UNRESOLVED (speaker path is not working)
+## Audio — root cause found; fix prepared but NOT yet verified
 
-**Read this section before changing anything.** The earlier diagnosis in this
-file was wrong. It blamed gain staging and a missing limiter; both were
-red herrings. The real problem is the codec driver, and the symptom changed
-during investigation.
+**The previous diagnosis in this file was wrong twice over.** It first blamed
+gain staging and a missing limiter, then blamed kernel module ordering. Both
+were red herrings. Both were reached before anyone searched the driver tracker
+for this exact machine model, which is the mistake that cost a whole evening.
 
-### Current symptom
+**Current symptom:** rear pair works, front pair is silent. No mixer setting
+changes it.
 
-- **Rear pair works. Front pair is silent.** No setting in PipeWire, WirePlumber
-  or ALSA changes this.
-- ALSA reports `line_outs=2 (0x24/0x25) type:speaker`, `speaker_outs=0`,
-  `hp_outs=1`. The `speaker_outs=0` is a naming artifact — the outputs are
-  classified as line outputs with type speaker — and is **not** by itself proof
-  of dead hardware.
-- The driver documentation states the CS8409 DAC needs **4 channels, 44.1 kHz,
-  S24_3LE**. A 4-channel sink (`Built-in Audio Analog Surround 4.0`) does
-  appear, so the format is reachable.
+### Cause 1 — HDA runtime power management (total silence)
 
-### The codec driver: what is actually known
+`davidjo/snd_hda_macbookpro` issue #209, filed on an **iMac19,1** — this
+machine. The reporter had everything apparently correct and no sound:
 
-The machine is an **iMac19,1 / A2115**. The driver that everyone points to,
-[`jackdanyell/imac18-3-cs8409-linux-audio`](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio),
-is written for the **iMac18,3** and its installer refuses any other model by
-design. It has still never produced working front speakers here.
+> `Primary patch_cs8409 NOT FOUND trying APPLE` · codec `CS8409/CS42L83` ·
+> `CS8409/CS42L83 Analog` present · jack detection correct · PCM `state:
+> RUNNING` · pin `0x24` at `Pin-ctls: 0x40: OUT` — **silent at every volume.**
 
-Its own issue tracker contains two results that contradict each other, and the
-difference is the whole story:
+With a debug build the amplifier I2C status read `0x20` instead of `0x18`, and
+neither the CS42L83 nor the four **TAS5764L** amplifiers answered.
 
-| Report | Install method | Result |
-|---|---|---|
-| issue #2 | module installed by hand into `/lib/modules/<k>/updates/ext01/` | **internal speakers worked** |
-| issue #3 | installed via **DKMS** | no PCM device at all; speakers silent |
+The cause is HDA runtime power management. Distros ship
+`snd_hda_intel power_save=1`, so the controller runtime-suspends after a second
+of idle. **The CS8409's I2C bridge is powered from that controller**, so while
+it is suspended the amplifiers cannot be programmed at all. There is no error
+anywhere: digital path running, pin enabled, PCM running, no sound. Issue #217
+adds that with the default setting the codec state goes bad after ~10 s idle.
 
-`updates/ext01` sorts **before** `updates/dkms`, so a module placed there wins
-the codec bind. **DKMS cannot express that ordering**, which is why it fails.
-`scripts/imac-audio-module` therefore builds and installs into `ext01` and never
-uses DKMS for this codec.
+```bash
+# /etc/modprobe.d/99-imac-audio.conf
+options snd_hda_intel power_save=0 power_save_controller=N
+```
 
-### Two build traps, both hit here
+The reporter states that after this, internal speakers work **with davidjo's
+driver unmodified from master**. This may also explain why the same model works
+for people on Fedora and Arch but not on Ubuntu.
 
-1. **The Apple code is behind compile-time guards.** `APPLE_CODECS` and
-   `APPLE_PINSENSE_FIXUP` gate the amplifier and pin handling. Build without
-   them and the module compiles, loads, and silently contains no Apple support.
-   Pass them via the cirrus `Makefile` (`ccflags-y`), **not** `KCFLAGS` — global
-   `KCFLAGS` dirties the whole tree and forces a full kernel rebuild.
+### Cause 2 — TDM slot corruption (partial silence)
 
-2. **A module built from a mismatched tree will not load at all.** Building from
-   a self-fetched kernel source produced:
-   ```
-   snd_hda_codec_cs8409: disagrees about version of symbol module_layout
-   ```
-   `vermagic` matched, so a vermagic check does **not** catch this. The real
-   discriminator is the `module_layout` CRC:
+`davidjo#211` bisected this on a different model and it matches our symptom
+exactly:
 
-   | Tree | `module_layout` CRC |
-   |---|---|
-   | `/usr/src/linux-7.2.2-1-obj/x86_64/default` (correct) | `0xbb7f52aa` |
-   | self-fetched `linux-7.2.2` source (wrong `.config`) | `0x60b44b0b` |
+> only **2 of the 4 speaker drivers** ever play. The failure is in the CS8409's
+> TDM output: **slots 1 and 2** (the middle of the frame) are never delivered
+> correctly. **Slots 0 and 3 are always clean.**
 
-   Always build against `/lib/modules/$(uname -r)/build`.
+Two of four channels working is precisely a "rear pair works, front pair silent"
+result. Apple's native format for this codec is **`0x4033` — S24_3LE, 4ch,
+44.1 kHz**; adding `SNDRV_PCM_FMTBIT_S24_3LE` to the driver's format mask woke
+the dead amplifiers. The 2-channel path in the driver misaligns data; a native
+4-channel stream is clean (#217).
 
-**Status: front speakers still silent. No working fix is known.**
+### Cause 3 — there is no hardware volume
 
-### If you experiment
+`davidjo#217`: no codec node has an amp, so `PCM Playback Volume` is an ALSA
+`softvol` that PipeWire mistakes for a hardware mixer. The result is a stepped
+curve — mute up to ~12%, then nearly full. Fix with
+`api.alsa.soft-mixer = true`.
 
-- Keep a known-good fallback. The PipeWire chain in
-  `~/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf` is not the cause;
-  do not spend time there.
-- Check `modinfo -n snd_hda_codec_cs8409` resolves to `updates/ext01`, then
-  `dmesg | grep -A4 'autoconfig for CS8409'`. A working machine logs
-  `Primary patch_cs8409 NOT FOUND trying APPLE` and a PCM named
-  `CS8409/CS42L83 Analog`. If you instead see `Cirrus Logic Generic`, the codec
-  has fallen back to the generic driver and the patched path is not active.
-- The external Behringer UMC204HD works and is unaffected by any of this.
+### Applying it
+
+```bash
+sudo ~/bin/imac-audio-fix --dry-run   # show what would change
+sudo ~/bin/imac-audio-fix             # apply
+sudo ~/bin/imac-audio-fix --check     # verify
+sudo ~/bin/imac-audio-fix --undo      # roll back
+```
+
+It writes the `power_save` option, installs davidjo's driver (with the
+`BUILT_MODULE_LOCATION` fix below), forces the 4-channel profile with
+`soft-mixer = true`, and sets the Apple crossover chain aside. **It never
+reboots.**
+
+### The DKMS build trap (why davidjo appeared not to work here)
+
+On kernels where the HDA codecs moved to `sound/hda/codecs/cirrus/`, the module
+compiles but DKMS cannot find it:
+
+```
+  LD [M]  codecs/cirrus/snd-hda-codec-cs8409.ko
+  # exit code: 0
+Error! Build of build/hda/snd-hda-codec-cs8409.ko failed for: <kernel>
+```
+
+`dkms.conf` still points `BUILT_MODULE_LOCATION` at the old path, so DKMS
+declares failure and installs nothing. One line:
+
+```diff
+-BUILT_MODULE_LOCATION[0]="build/hda"
++BUILT_MODULE_LOCATION[0]="build/hda/codecs/cirrus"
+```
+
+**This means the driver may never have been under test here at all.** It also
+reinterprets `jackdanyell` issue #3 — its "no PCM devices are registered at
+all" is exactly what a spurious DKMS failure produces, so the
+`updates/ext01` ordering theory built from it was probably solving a
+non-problem.
+
+### What was tried and abandoned, and why
+
+| Attempt | Outcome |
+|---|---|
+| Unity-gain PipeWire chain, ALSA levels to 100% | No effect on the fault |
+| jackdanyell v0.2 (`imac18-3-cs8409-linux-audio`) | Wrong model; targets iMac18,3 |
+| DKMS install of that fork | No PCM devices registered |
+| Hand-built module in `updates/ext01` | `disagrees about version of symbol module_layout` — `vermagic` matched, so the guard missed it. The tree had a different `.config` (`module_layout` CRC `0x60b44b0b` vs the real `0xbb7f52aa`) |
+| `updates/ext01` ordering theory | Built on issue #2 vs #3; likely a red herring (see above) |
+
+`scripts/imac-audio-module` is retained because building against
+`/lib/modules/$(uname -r)/build` is still the correct mechanism, but it is not
+the fix. **Try `imac-audio-fix` first.**
+
+### If it is still silent after a reboot
+
+Report these three facts:
+
+1. Does `imac-audio-fix --check` say `power_save=N`?
+2. Does `/proc/asound/card0/codec#0` show the CS42L83 sub-codec?
+3. With a 4-channel stream, do channels 0 and 3 play while 1 and 2 stay silent?
+
+Those distinguish cause 1 from cause 2.
 
 ## Plymouth — SUSPECTED OF BREAKING BOOT, remove from the default path
 
