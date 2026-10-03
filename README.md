@@ -71,7 +71,8 @@ before changing anything.
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
 | `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
-| `scripts/imac-audio-module` | build/install the patched CS8409 codec for a kernel (never DKMS) |
+| `scripts/imac-audio-fix` | **apply the iMac19,1 speaker fixes** (power_save, driver, 4ch) — start here |
+| `scripts/imac-audio-module` | build/install a CS8409 codec module for a kernel (never DKMS) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
 | `THIRD_PARTY_NOTICES.md` | credits for every upstream project relied on |
 
@@ -103,10 +104,12 @@ visible gap or displacement across the midline. Achieved with the **stock**
 
 Everything else is documented but **unresolved or actively harmful as configured**:
 
-- **Audio: broken.** Rear pair works, front pair silent. The widely-recommended
-  CS8409 driver is written for the iMac18,3; this machine is an iMac19,1. See
-  the audio section of `docs/fixes.md` before changing anything — the earlier
-  diagnosis in that file was wrong.
+- **Audio: root cause found, fix prepared, not yet verified.** Rear pair works,
+  front pair silent. Two documented causes, both on this exact model:
+  HDA runtime power management suspends the controller that powers the CS8409's
+  I2C bridge, so the amplifiers are never programmed; and the codec's middle TDM
+  slots are corrupted, so only 2 of 4 channels play. Run
+  `sudo scripts/imac-audio-fix`. See the audio section of `docs/fixes.md`.
 - **Plymouth: suspected of hanging the boot.** It has never once rendered on
   this panel, and a boot through `initrd-stackC-ply` stalled before the network
   came up, which on an unattended machine means physical access to recover.
