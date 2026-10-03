@@ -136,18 +136,49 @@ if sel opencl; then
     # script will not create one again. GPU OpenCL for Resolve has to come
     # from a per-process wrapper, not a system-wide linker change.
   fi
-  # Guard against the old global rusticl hack being reintroduced or left behind.
-  if [ -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf ] \
-     || [ -d /usr/lib/x86_64-linux-gnu/GL ]; then
-    bad "leftovers from the old global rusticl hack are present"
-    hint "sudo rm -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf"
-    hint "sudo rm -rf /usr/lib/x86_64-linux-gnu/GL && sudo ldconfig"
+  # The dangerous leftover is the global linker entry. That one put Flatpak Mesa
+  # on the system-wide search path and stopped KWin starting, so it must never
+  # exist. LD_LIBRARY_PATH inside resolve-200 is the supported mechanism.
+  if [ -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf ]; then
+    bad "global linker entry for the Flatpak runtime is present - this breaks the desktop"
+    hint "sudo rm -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf && sudo ldconfig"
   fi
+
+  # /usr/lib/x86_64-linux-gnu/GL/default/share/clc is a hardcoded *Debian* path
+  # rusticl looks in for libclc bitcode; it has no environment override. Two
+  # inert .spv data files are staged there on purpose. Anything else in that
+  # tree - especially a library - would be a leftover from the broken attempt.
+  CLCD=/usr/lib/x86_64-linux-gnu/GL/default/share/clc
+  if [ -d /usr/lib/x86_64-linux-gnu/GL ]; then
+    STRAY=$(find /usr/lib/x86_64-linux-gnu/GL -type f ! -name '*.spv' 2>/dev/null | head -5)
+    if [ -n "$STRAY" ]; then
+      bad "non-bitcode files under the staged libclc path:"
+      printf '%s\n' "$STRAY" | sed 's/^/    /'
+      hint "sudo rm -rf /usr/lib/x86_64-linux-gnu/GL"
+    elif [ -f "$CLCD/spirv-mesa3d-.spv" ]; then
+      ok "libclc bitcode staged (data only, shadows nothing on openSUSE)"
+    fi
+  else
+    warn "libclc bitcode not staged; rusticl will fail to load"
+    hint "copy spirv-mesa3d-.spv and spirv64-mesa3d-.spv from the Flatpak"
+    hint "GL runtime into $CLCD"
+  fi
+
+  # clinfo must be run the way the launcher runs it, otherwise it reports no
+  # GPU even when Resolve has one.
   if command -v clinfo >/dev/null; then
-    NGPU=$(clinfo 2>/dev/null | grep -cE "Device Type +GPU")
+    RT=""
+    if [ -r "$ICD" ]; then
+      D=$(cat "$ICD" 2>/dev/null | head -1)
+      [ -e "$D" ] && RT=$(dirname "$D")
+    fi
+    CI=$(LD_LIBRARY_PATH="$RT" RUSTICL_ENABLE=radeonsi clinfo 2>/dev/null)
+    NGPU=$(printf '%s\n' "$CI" | grep -cE "Device Type +GPU")
     if [ "${NGPU:-0}" -ge 1 ]; then
       ok "GPU OpenCL present"
-      clinfo 2>/dev/null | grep -E "Device Name|Device Type|Max compute" | head -3 | sed 's/^/    /'
+      printf '%s\n' "$CI" | grep -E "Device Name|Device Type|Max compute" | head -3 | sed 's/^/    /'
+    elif printf '%s\n' "$CI" | grep -q rusticl; then
+      warn "rusticl loaded but advertises no GPU (RUSTICL_ENABLE not honoured?)"
     else
       warn "no GPU OpenCL device; Resolve will use CPU"
     fi

@@ -1,33 +1,67 @@
 #!/bin/sh
-# DaVinci Resolve launcher for the iMac 5K.
-#
+# DaVinci Resolve launcher for the iMac 5K (iMac19,1 / A2115).
 # Installed as /usr/local/bin/resolve-200
 #
-# Why RUSTICL_ENABLE=radeonsi
-# ----------------------------
-# Rusticl does not advertise OpenCL support for any GPU driver by default; the
-# upstream default is deliberately empty while the driver matures. Without this
-# variable set, rusticl is present, clinfo may list a platform, and DaVinci
-# Resolve still reports no OpenCL-capable GPU. It must be set for the process
-# that needs it, which is why it lives here rather than in /etc/environment or
-# a global ld.so.conf entry.
-# Refs: Arch Wiki DaVinci_Resolve (tested with RUSTICL_ENABLE=radeonsi),
-# Mesa MR 21305 / commit 0a072bb3 (rusticl support in Resolve).
+# GPU OpenCL for Resolve -- why this is all process-scoped
+# -------------------------------------------------------
+# openSUSE ships no OpenCL driver. The freedesktop Flatpak GL runtime on this
+# machine contains a complete Mesa rusticl, but it needs two things the system
+# does not provide, and both had to be solved WITHOUT touching global linker
+# configuration. An earlier attempt added the runtime to /etc/ld.so.conf.d,
+# which put Flatpak Mesa on the global search path and stopped KWin from
+# starting, i.e. it broke the graphical login. Never do that.
 #
-# Why QT_ENABLE_HIGHDPI_SCALING
-# -----------------------------
-# Resolve 21.1 bundles Qt 5.15.2 and ships only libqxcb.so, so it runs under
-# XWayland. On Qt 5, QT_SCALE_FACTOR is ignored for widget geometry unless
-# high-DPI scaling is enabled explicitly - setting only the scale factor
-# silently does nothing. Qt 6 needs none of this; it is on by default.
+# 1. libLLVMSPIRVLib.so.21.1 - the runtime needs LLVM 21, the system has LLVM 23.
+#    Solved with LD_LIBRARY_PATH below, which affects only this process.
+#
+# 2. libclc SPIR-V bitcode. rusticl looks for
+#       /usr/lib/x86_64-linux-gnu/GL/default/share/clc/spirv-mesa3d-.spv
+#    which is a hardcoded *Debian* path with no environment override (rusticl
+#    only honours CLC_DEBUG). The two .spv files are therefore staged there.
+#    That path is unused by openSUSE's Mesa, which keeps libclc in
+#    /usr/share/clc, so an inert copy here shadows nothing. This is data only -
+#    no library is placed on any search path.
+#
+# RUSTICL_ENABLE=radeonsi is also required: rusticl advertises no GPU driver at
+# all by default, so without it a perfectly good rusticl still leaves Resolve
+# reporting no OpenCL-capable GPU.
+#
+# Verified: rusticl exposes "AMD Radeon Graphics (radeonsi, polaris10, ACO)",
+# Device Type GPU, 28 compute units, OpenCL 3.1.
+#
+# Qt 5.15 (which Resolve 21.1 bundles, running under XWayland) ignores
+# QT_SCALE_FACTOR for widget geometry unless high-DPI is enabled explicitly.
+# Qt 6 needs none of this; it is on by default.
 
-export QT_ENABLE_HIGHDPI_SCALING=1
-export QT_AUTO_SCREEN_SCALE_FACTOR=0
-export QT_SCALE_FACTOR=2
-export QT_FONT_DPI=192
+set -e
 
-# GPU compute for Resolve. radeonsi is correct for the Radeon Pro 580
-# (polaris10) in the 2019 5K iMac.
-export RUSTICL_ENABLE=radeonsi
+ICD=/etc/OpenCL/vendors/rusticl.icd
+RT_LIB=""
+RT_CLC=""
+
+if [ -r "$ICD" ]; then
+  DRIVER=$(cat "$ICD" 2>/dev/null | head -1)
+  if [ -n "$DRIVER" ] && [ -e "$DRIVER" ]; then
+    RT_LIB=$(dirname "$DRIVER")
+    RT_CLC=$(cd "$RT_LIB/../share/clc" 2>/dev/null && pwd || true)
+  fi
+fi
+
+# Tell rusticl to advertise the radeonsi driver. Harmless if rusticl is absent.
+RUSTICL_ENABLE=radeonsi
+export RUSTICL_ENABLE
+
+# Supply LLVM 21 to this process only. Never a global ld.so.conf entry.
+if [ -n "$RT_LIB" ]; then
+  LD_LIBRARY_PATH="$RT_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export LD_LIBRARY_PATH
+fi
+
+# 200% scaling on the 5K panel under XWayland / Qt 5.15.
+QT_ENABLE_HIGHDPI_SCALING=1
+QT_AUTO_SCREEN_SCALE_FACTOR=0
+QT_SCALE_FACTOR=2
+QT_FONT_DPI=192
+export QT_ENABLE_HIGHDPI_SCALING QT_AUTO_SCREEN_SCALE_FACTOR QT_SCALE_FACTOR QT_FONT_DPI
 
 exec /opt/resolve/bin/resolve "$@"

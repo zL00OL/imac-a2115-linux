@@ -225,7 +225,8 @@ correct while the physical seam is still visible.
 ## 7. What has actually been verified here
 
 **Confirmed working and seamless.** One 5120x2880 desktop, no gap, no
-displacement across the midline, with the **stock** `amdgpu` driver and
+displacement across the midline, with a **patched** `amdgpu` supplied by the
+custom initramfs (see below) and
 `amdgpu.tiled_stitch=1`. No patched module, no EDID override, no per-connector
 fixes were needed.
 
@@ -235,3 +236,91 @@ in section 3 are still the right starting point — but note that this machine d
 scaling: force scale `1` on the tiled output before investigating anything else.
 
 Recording any future change here as you test is worthwhile.
+---
+
+## Correction: the running `amdgpu` is patched, not stock
+
+This file previously claimed the seamless 5K came from the stock driver plus
+`amdgpu.tiled_stitch=1`. That is wrong, and the evidence is unambiguous:
+
+```
+loaded  /sys/module/amdgpu/srcversion  : 6BE242C1C62DD79046F2E9A
+on-disk /lib/modules/7.2.2-1-default/.../amdgpu.ko.zst : 4FA5DDFCFF3DDAE9F5FE22E
+```
+
+The loaded module matches **none** of the three files in that directory
+(`amdgpu.ko.zst`, `amdgpu.ko.zst.stock`, `amdgpu.ko.5k-backup` are all
+byte-identical, 6826583 bytes), and `rpm -V kernel-default` reports the package
+intact.
+
+The patched module is **embedded in the initramfs**:
+
+```
+$ lsinitrd /boot/efi/opensuse-slowroll/7.2.2-1-default/initrd-stackC | grep amdgpu/amdgpu
+amdgpu/amdgpu.ko.zst
+```
+
+That is also why the running driver emits messages that exist nowhere in the
+on-disk copies or in the 7.2.7 source tree:
+
+```
+APPLE5K: link-health build=post-commit-recovery checks=8 recoveries=2
+TILED_STITCH: root eDP-1 re-read as product 0xae26 with tile block (attempt 1)
+TILED_STITCH: synthesized root EDID for eDP-1 from source vendor=06
+TILED_STITCH: exposed only stitched mode 5120x2880 on eDP-1 (tile 2x2)
+```
+
+### Confirming which module is loaded
+
+```bash
+cat /sys/module/amdgpu/srcversion
+modinfo -F srcversion amdgpu
+dmesg | grep -m3 -E 'APPLE5K|TILED_STITCH'
+```
+
+If `APPLE5K` lines appear, the initramfs patch is active. Do **not** install a
+second patched `amdgpu.ko` into `/lib/modules` — the initramfs copy is already
+the one in use, and the two will not agree.
+
+### Consequence
+
+`initrd-stackC` is not optional. It carries the display patch. Rebuilding it
+from a stock kernel would leave the machine with a 4K panel and, historically,
+an unreachable boot.
+
+---
+
+## Known fault: panel fails to initialise on cold boot
+
+The display intermittently fails to come up at 5120x2880, most reliably on a
+cold boot and less often on a warm reboot. Observed once taking **2 hours 15
+minutes**, during which the machine had no network address at all and could not
+be reached remotely.
+
+The initramfs patch logs an 8-pass `link-health` retry loop, and on the bad boot
+the tiled-stitch sequence did not complete until `dmesg` timestamp 8109 s.
+
+### Root cause, from the driver tracker
+
+[`ahmadtv/omarchy-imac18-3` issue 7](https://github.com/ahmadtv/omarchy-imac18-3/issues/7)
+traces this on an iMac18,3 to an **insufficient AUX-wake timing budget**: the
+number of retry attempts allotted before giving up on AUX wake is too low, so
+link training gives up before the panel has finished waking. Their fix raises
+the attempt counts, not the timeouts, and was validated on two machines.
+
+Current values in the 7.2.7 source on this system:
+
+| File | Setting | Value |
+|---|---|---|
+| `link_dpms.c:80` | `LINK_TRAINING_ATTEMPTS` | 4 |
+| `link_detection.c:68` | `LINK_TRAINING_MAX_VERIFY_RETRY` | 2 |
+
+**Status: identified, not applied.** Applying it means patching whichever source
+tree produced the `initrd-stackC` amdgpu, which is not currently on disk —
+`/var/cache/5kbuild` was removed once it was confirmed unnecessary for the audio
+driver, and it did contain the built module tree.
+
+Until this is fixed, treat a long dark or bright screen after power-on as
+**normal, not a hang**: leave it alone. It resolved itself once. Forcing a
+power cycle is what risks losing access.
+
