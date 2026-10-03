@@ -134,6 +134,9 @@ if [ "$CHECK" -eq 1 ]; then
     "")                bad "no module found at all" ;;
     *)                 warn "the in-tree/DKMS module wins, not ext01" ;;
   esac
+  if dkms status 2>/dev/null | grep -qi macbookpro; then
+    ok "davidjo DKMS driver registered - it rebuilds itself per kernel"
+  fi
   if [ "$TARGET" = "$RUNNING" ]; then
     say "  (target is the running kernel - a reboot is required to load it)"
   else
@@ -149,6 +152,22 @@ say ""; say "-- locating a build tree for $TARGET --"
 # (7.2.2-1-default), so the name cannot be derived from the target. Glob the
 # known cache location instead and rely on the vermagic check after the build
 # to guarantee the result actually belongs to the target kernel.
+# The authoritative module_layout CRC for the running kernel. A module built
+# from a tree with a different .config fails to load with
+# "disagrees about version of symbol module_layout" EVEN IF vermagic matches,
+# so vermagic alone is not a sufficient check.
+target_crc() {
+  local k=$1
+  local d
+  d=$(ls -1 "/lib/modules/$k/build" 2>/dev/null | head -1)
+  if [ -n "$d" ] && [ -f "$d/Module.symvers" ]; then
+    grep -w module_layout "$d/Module.symvers" 2>/dev/null | head -1 | awk '{print $1}'
+  fi
+}
+WANT_CRC=$(target_crc "$TARGET")
+[ -n "$WANT_CRC" ] && say "  target module_layout CRC: $WANT_CRC" \
+                   || warn "could not read the target module_layout CRC"
+
 TREE=""
 for cand in "/usr/src/linux-obj-$TARGET/default" \
             "/usr/src/linux-$TARGET" \
@@ -157,7 +176,19 @@ for cand in "/usr/src/linux-obj-$TARGET/default" \
   [ -d "$cand" ] || continue
   [ -f "$cand/sound/hda/codecs/cirrus/cs8409.c" ] || continue
   if [ -f "$cand/.config" ] && [ -f "$cand/Module.symvers" ]; then
-    TREE="$cand"; ok "build tree: $cand"
+    if [ -n "$WANT_CRC" ]; then
+      CAND_CRC=$(grep -w module_layout "$cand/Module.symvers" 2>/dev/null | head -1 | awk '{print $1}')
+      if [ -n "$CAND_CRC" ] && [ "$CAND_CRC" != "$WANT_CRC" ]; then
+        bad "skipping $cand"
+        say "          tree module_layout CRC $CAND_CRC != target $WANT_CRC"
+        say "          a module built here would not load (vermagic would still match)"
+        continue
+      fi
+      ok "build tree: $cand (module_layout CRC matches)"
+    else
+      ok "build tree: $cand"
+    fi
+    TREE="$cand"
     break
   fi
   warn "skipping $cand (needs .config and Module.symvers for an in-tree build)"

@@ -149,6 +149,8 @@ say ""; say "-- 1. disable HDA runtime power management --"
 # it is a documented cause of "everything looks right, no sound at any volume".
 if [ -f "$MODPROBE" ] && grep -q 'power_save=0' "$MODPROBE"; then
   ok "already set"
+elif [ "$DRY" -eq 1 ]; then
+  say "  [dry-run] would: write $MODPROBE with power_save=0"
 else
   printf '%s\n' \
     '# Added by imac-audio-fix.' \
@@ -159,7 +161,6 @@ else
     'options snd_hda_intel power_save=0 power_save_controller=N' > "$MODPROBE" \
     && ok "wrote $MODPROBE" || die "could not write $MODPROBE"
 fi
-[ "$DRY" -eq 1 ] && say "  [dry-run] would: write $MODPROBE"
 
 #--------------------------------------------------------------- driver
 say ""; say "-- 2. davidjo out-of-tree CS8409 driver --"
@@ -262,9 +263,13 @@ fi
 
 say ""
 say "=========================================================="
-say " APPLIED. This script did NOT reboot, and will not."
+if [ "$DRY" -eq 1 ]; then
+  say " DRY RUN. Nothing was changed. Re-run without --dry-run to apply."
+else
+  say " APPLIED. This script did NOT reboot, and will not."
+fi
 say ""
-say " A reboot is required for the power_save change to take effect."
+[ "$DRY" -eq 1 ] || say " A reboot is required for the power_save change to take effect."
 say " When you are physically present:"
 say "   1. reboot"
 say "   2. sudo ~/bin/imac-audio-fix --check"

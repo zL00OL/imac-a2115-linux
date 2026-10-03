@@ -121,6 +121,52 @@ source builds were used during development. On any other distro, skip all of thi
   rusticl advertises the GPU. See below.
 - Owns APR, so system APR is unused at runtime.
 
+### SOLVED: GPU OpenCL works, without touching global linker config
+
+Verified output:
+
+```
+Platform #0: rusticl
+ `-- Device #0: AMD Radeon Graphics (radeonsi, polaris10, ACO, DRM 3.64)
+    Device Type: GPU | 28 compute units | OpenCL 3.1
+```
+
+Three things were needed, and **none of them may be done globally**:
+
+**1. `RUSTICL_ENABLE=radeonsi`.** Rusticl advertises no GPU driver by default, so
+a working rusticl still leaves Resolve reporting no GPU. It must be set for the
+Resolve process.
+
+**2. `libLLVMSPIRVLib.so.21.1`** — the Flatpak runtime's LLVM 21, while the system
+has LLVM 23. Supplied with `LD_LIBRARY_PATH` **inside the launcher**. This is
+the whole point: the old approach put the runtime in
+`/etc/ld.so.conf.d/zz-rusticl-runtime.conf`, which put Flatpak Mesa on the
+global search path and stopped KWin from starting. A per-process variable
+cannot do that.
+
+**3. libclc SPIR-V bitcode.** Rusticl looks for
+`/usr/lib/x86_64-linux-gnu/GL/default/share/clc/spirv-mesa3d-.spv` — a hardcoded
+**Debian** path with **no environment override** (only `CLC_DEBUG` is honoured).
+openSUSE's `libclc` package ships only `.bc` files, not the `.spv` bitcode, so
+the two files are copied from the Flatpak runtime:
+
+```bash
+S=/var/lib/flatpak/runtime/org.freedesktop.Platform.GL.default/x86_64/*/*/files/share/clc
+sudo mkdir -p /usr/lib/x86_64-linux-gnu/GL/default/share/clc
+sudo cp $S/spirv-mesa3d-.spv $S/spirv64-mesa3d-.spv         /usr/lib/x86_64-linux-gnu/GL/default/share/clc/
+```
+
+This is **data only**. openSUSE's Mesa keeps libclc in `/usr/share/clc`, so an
+inert copy in the Debian path shadows nothing, and no library is placed on any
+search path. `imac-reapply` verifies that only `.spv` files live there and fails
+if anything else appears.
+
+The Flatpak runtime's libclc also ships `polaris10-*.bc`, the compiled kernels
+for this GPU specifically.
+
+**Launch Resolve with `resolve-200`**, which sets all of the above plus the Qt
+high-DPI variables. The `.desktop` entry points at it.
+
 ### The missing piece: `RUSTICL_ENABLE=radeonsi`
 
 Rusticl **does not advertise OpenCL for any GPU driver by default** — the
@@ -146,10 +192,8 @@ lists a Radeon RX 7600 working with exactly this variable.
 > and rusticl has reported this machine's Radeon Pro 580 as 28 compute units
 > and OpenCL 3.1, so the rusticl path is viable here.
 
-**Status: not yet verified end to end.** GPU OpenCL was working when the global
-linker hack was in place, but that hack also broke the graphical login and had
-to be reverted. What has never been tested is rusticl + `RUSTICL_ENABLE` with
-**no** global linker change. That is the configuration to try next.
+**Status: verified working 2026-10-03**, with no global linker change. This is
+the configuration that should be kept.
 
 ### UI scaling — Qt 5.15 quirk
 
@@ -194,7 +238,104 @@ next login** — never restart sddm mid-session.
 
 ---
 
-## Audio — root cause found; fix prepared but NOT yet verified
+## Audio — FIXED (tweeters + woofers), verified 2026-10-03
+
+> **Outcome:** `power_save=0 power_save_controller=N` plus davidjo's
+> `snd_hda_macbookpro` driver (DKMS) makes the internal speakers work. The
+> driver must be present *as well as* the power management fix — either alone
+> is not enough. See "Cause 1" and "Cause 2" below for why.
+
+### What was actually required
+
+```bash
+# /etc/modprobe.d/99-imac-audio.conf
+options snd_hda_intel power_save=0 power_save_controller=N
+```
+
+```bash
+# davidjo/snd_hda_macbookpro via DKMS, built against this kernel
+sudo dkms install --force snd-hda-macbookpro/0.1
+```
+
+Verified markers after reboot:
+
+```
+Primary patch_cs8409 NOT FOUND trying APPLE
+Codec: Cirrus Logic CS8409/CS42L83
+modinfo -n snd_hda_codec_cs8409 -> .../updates/snd-hda-codec-cs8409.ko.zst
+```
+
+`CS8409/CS42L83` is the signature that the patched driver is live; the in-tree
+driver only ever reports `CS8409`.
+
+### Two traps that cost hours
+
+**The DKMS build path.** Upstream `dkms.conf` already carries
+`BUILT_MODULE_LOCATION[0]="build/hda/codecs/cirrus"`, which is required on
+kernels where the HDA codecs moved. If a build "fails" but the log shows
+`exit code: 0`, DKMS could not find the `.ko` and installed nothing.
+
+**This host cannot reach `cdn.kernel.org`.** davidjo's installer downloads the
+kernel tarball, and it hung here for many minutes. It now copies the `sound/hda`
+subtree from a preserved source directory instead
+(`/usr/src/snd-hda-macbookpro-0.1/hda-src`, 109 MB). `GitHub` is also
+unreachable from this machine, so clone the driver elsewhere and copy it in.
+
+### Cause 2 — TDM slots: diagnosed, NOT fixed
+
+With the driver and `power_save` fixed, playback is audible but the channels are
+wrong: **tweeters only**, and on one test a loud hiss. That is 2 of 4 channels,
+matching [issue #211](https://github.com/davidjo/snd_hda_macbookpro/issues/211)
+exactly — slots 0 and 3 clean, the middle slots corrupted.
+
+The prescribed fix is to offer `SNDRV_PCM_FMTBIT_S24_3LE`. The playback path in
+`cirrus_apple.h` omits it while the capture paths include it:
+
+```c
+hinfo->formats = SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S24_LE;   /* needs S24_3LE */
+```
+
+**Adding the flag is not sufficient.** PipeWire always negotiates `s32le` and
+ignored the new format, and restricting the mask to `S24_3LE` only made things
+worse — PipeWire then failed to open the device at all (`Input/output error`).
+Forcing the format from userspace is the unsolved part.
+
+### Also required: a working PipeWire state
+
+A stale WirePlumber state (muted sink, bad volume, sticky 4-channel profile)
+produced **total silence** at one point, which looked like a driver failure but
+was not. Resetting it restored audio immediately:
+
+```bash
+systemctl --user stop wireplumber pipewire pipewire-pulse
+mv ~/.local/state/wireplumber ~/.local/state/wp.bak
+systemctl --user start pipewire pipewire-pulse wireplumber
+```
+
+### Warning: there is no stock codec fallback
+
+`rpm -V kernel-default` reports:
+
+```
+missing  /usr/lib/modules/7.2.2-1-default/kernel/sound/hda/codecs/cirrus/snd-hda-codec-cs8409.ko.zst
+```
+
+DKMS archived and removed the in-tree module when it installed. If the DKMS
+registration is ever removed, **no codec loads at all**. Restore with
+`sudo dkms install --force snd-hda-macbookpro/0.1`.
+
+### The old ext01 approach — superseded
+
+`scripts/imac-audio-module` builds into `updates/ext01` and is retained only
+because it is the correct mechanism for a *hand-built* module. It is not how the
+audio is fixed now: DKMS with `power_save=0` is. Its vermagic check is also
+insufficient on its own — a mismatched tree produces `disagrees about version of
+symbol module_layout` while vermagic still matches, so it now compares the
+`module_layout` CRC as well.
+
+---
+
+## Audio: earlier diagnosis (kept for the record)
 
 **The previous diagnosis in this file was wrong twice over.** It first blamed
 gain staging and a missing limiter, then blamed kernel module ordering. Both
@@ -317,7 +458,30 @@ Report these three facts:
 
 Those distinguish cause 1 from cause 2.
 
-## Plymouth — SUSPECTED OF BREAKING BOOT, remove from the default path
+## Plymouth — REMOVED, measured as harmful on this machine
+
+**Measured, not assumed.** The two initramfs differ in exactly one relevant way:
+
+| Initramfs | Dracut arguments | Plymouth files | Boot |
+|---|---|---|---|
+| `initrd-stackC` | `--omit 'plymouth resume' --add-drivers 'amdgpu'` | 1 | **~60–70 s** |
+| `initrd-stackC-ply` | `--add 'plymouth' --omit 'resume' --add-drivers 'amdgpu'` | 216 | **2 h 15 m, unreachable** |
+
+The one that omits plymouth boots in about a minute. The one that bundles 216
+Plymouth files stalled for over two hours with no network address, on an
+unattended machine. `initrd-stackC-ply` and its boot entry
+`5k-stackc-plymouth.conf` have been deleted. The 70 MB also freed the ESP,
+which was blocking all package updates.
+
+Backed up at `/var/cache/imac-boot-backup/` — restore with:
+
+```bash
+cp -p /var/cache/imac-boot-backup/initrd-stackC-ply \
+      /boot/efi/opensuse-slowroll/7.2.2-1-default/
+cp -p /var/cache/imac-boot-backup/5k-stackc-plymouth.conf /boot/efi/loader/entries/
+```
+
+### Historical note
 
 Configured as `Theme=linux-penguin` with a custom `initrd-stackC-ply` (216
 Plymouth entries), and set as the **default** boot entry in

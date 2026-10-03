@@ -4,10 +4,16 @@
 Everything else in this repo is secondary.
 
 Hardware: iMac 19,1 / A2115, Radeon RX 580 (`polaris10`), Intel i5-8500.
-Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2, stock `amdgpu`.
+Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2.
 
 > [!IMPORTANT]
-> The GPU driver is **stock**. Do not install or load any patched `amdgpu`.
+> **The 5K panel needs a patched `amdgpu`, and it is not stock.** This was
+> previously documented as stock and was wrong. The patched module is embedded
+> inside the custom `initrd-stackC` initramfs (`--add-drivers 'amdgpu'`), which
+> is why the copies under `/lib/modules` all look stock and `rpm -V` reports
+> the kernel package intact. See `docs/tiled-5k.md` for how to confirm which
+> module is actually loaded. Do **not** additionally install a patched
+> `amdgpu.ko` into `/lib/modules` — the initramfs one is already in use.
 > Anything named `amdgpu-stackC-*.ko` is a leftover; the `async` variant is
 > known-bad. See `docs/hardware.md#the-stack-c-myth`.
 
@@ -100,8 +106,15 @@ AMD graphics team.
 ## Status
 
 **Tiled 5K: working, and seamless is confirmed** — one 5120x2880 desktop with no
-visible gap or displacement across the midline. Achieved with the **stock**
-`amdgpu` driver plus `amdgpu.tiled_stitch=1`. No patched driver required.
+visible gap or displacement across the midline. This depends on a **patched
+`amdgpu` carried inside the custom `initrd-stackC`** plus
+`amdgpu.tiled_stitch=1`. It is not stock, and rebuilding or replacing that
+initramfs is the single most destructive thing you can do to this machine.
+
+**Known remaining fault:** the panel sometimes fails to initialise on a cold
+boot, leaving the machine unreachable for hours. Root cause is traced to an
+insufficient AUX-wake retry budget in the DP link-training loops. Unfixed —
+see `docs/tiled-5k.md`.
 
 Everything else is documented but **unresolved or actively harmful as configured**:
 

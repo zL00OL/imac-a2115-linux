@@ -209,15 +209,27 @@ fi
 step "4b. audio codec module for kernel $NEWEST2"
 AM="$BIN/imac-audio-module"
 if [ -x "$AM" ]; then
+  # Rebuilding is only needed when the kernel actually moved. If it did not,
+  # and a DKMS driver is already registered, rebuilding risks replacing a
+  # working module with one built from a mismatched source tree.
   if [ "$CURV" = "$NEWEST2" ]; then
-    say "  kernel unchanged; ensuring the module is present anyway"
-  fi
-  "$AM" --kernel "$NEWEST2" 2>&1 | sed 's/^/  /'
-  ARC=${PIPESTATUS[0]}
-  if [ "$ARC" -ne 0 ]; then
-    warn "the audio module could not be built for $NEWEST2 (rc=$ARC)"
-    warn "the speakers WILL be silent after rebooting into it"
-    say "  see /var/log/imac-audio-module.log"
+    if dkms status 2>/dev/null | grep -qi macbookpro; then
+      say "  kernel unchanged and the DKMS driver rebuilds itself per kernel;"
+      say "  skipping the rebuild so a working module is not replaced."
+      say "  status: $(dkms status | grep -i macbookpro | head -1)"
+    else
+      say "  kernel unchanged; ensuring a codec module is present"
+      "$AM" --kernel "$NEWEST2" 2>&1 | sed 's/^/  /'
+      [ "${PIPESTATUS[0]}" -ne 0 ] && warn "codec module check/build reported problems"
+    fi
+  else
+    "$AM" --kernel "$NEWEST2" 2>&1 | sed 's/^/  /'
+    ARC=${PIPESTATUS[0]}
+    if [ "$ARC" -ne 0 ]; then
+      warn "the audio module could not be built for $NEWEST2 (rc=$ARC)"
+      warn "the speakers WILL be silent after rebooting into it"
+      say "  see /var/log/imac-audio-module.log"
+    fi
   fi
 else
   bad "$AM missing - the audio codec will NOT be rebuilt for the new kernel"
