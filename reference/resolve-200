@@ -51,17 +51,50 @@ fi
 RUSTICL_ENABLE=radeonsi
 export RUSTICL_ENABLE
 
-# Supply LLVM 21 to this process only. Never a global ld.so.conf entry.
-if [ -n "$RT_LIB" ]; then
-  LD_LIBRARY_PATH="$RT_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Supply libLLVMSPIRVLib.so.21.1 to this process only - never a global
+# ld.so.conf entry, which previously stopped KWin starting.
+#
+# Point this at /opt/resolve/rusticl-libs, which holds ONLY that one library,
+# rather than at the whole Flatpak runtime lib directory. The runtime also
+# ships its own libLLVM.so.21.1 and 45 other libraries; putting that directory
+# on LD_LIBRARY_PATH would shadow the system copies of all of them for Resolve
+# and anything it spawns. The single library is enough - libLLVM.so.21.1 is
+# already provided system-wide by libLLVM21.
+SPIRV_DIR=/opt/resolve/rusticl-libs
+if [ -e "$SPIRV_DIR/libLLVMSPIRVLib.so.21.1" ]; then
+  LD_LIBRARY_PATH="$SPIRV_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   export LD_LIBRARY_PATH
 fi
 
 # 200% scaling on the 5K panel under XWayland / Qt 5.15.
+#
+# All five are needed. QT_SCALE_FACTOR alone does nothing on Qt 5 widget
+# geometry unless QT_ENABLE_HIGHDPI_SCALING is set. QT_SCREEN_SCALE_FACTORS and
+# GDK_SCALE cover the parts of the UI that Qt does not scale itself (menus,
+# some dialogs). Dropping any of them leaves Resolve partly or wholly at 100%.
 QT_ENABLE_HIGHDPI_SCALING=1
 QT_AUTO_SCREEN_SCALE_FACTOR=0
 QT_SCALE_FACTOR=2
+QT_SCREEN_SCALE_FACTORS=2
 QT_FONT_DPI=192
-export QT_ENABLE_HIGHDPI_SCALING QT_AUTO_SCREEN_SCALE_FACTOR QT_SCALE_FACTOR QT_FONT_DPI
+GDK_SCALE=2
+export QT_ENABLE_HIGHDPI_SCALING QT_AUTO_SCREEN_SCALE_FACTOR QT_SCALE_FACTOR
+export QT_SCREEN_SCALE_FACTORS QT_FONT_DPI GDK_SCALE
+
+# Debugging aid: print the environment this launcher would use, and confirm
+# whether rusticl reports a GPU, without starting Resolve.
+case "${1:-}" in
+  --print-env)
+    echo "RUSTICL_ENABLE=$RUSTICL_ENABLE"
+    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+    echo "QT_SCALE_FACTOR=$QT_SCALE_FACTOR QT_SCREEN_SCALE_FACTORS=$QT_SCREEN_SCALE_FACTORS QT_FONT_DPI=$QT_FONT_DPI GDK_SCALE=$GDK_SCALE"
+    echo "LD dir: ${SPIRV_DIR:-<none>}"
+    echo "runtime lib (reference only): ${RT_LIB:-<none>}"
+    echo "libclc staged: $([ -f /usr/lib/x86_64-linux-gnu/GL/default/share/clc/spirv-mesa3d-.spv ] && echo yes || echo no)"
+    echo "--- clinfo as this launcher sees it ---"
+    clinfo -l 2>&1 | sed 's/^/  /'
+    exit 0
+    ;;
+esac
 
 exec /opt/resolve/bin/resolve "$@"
