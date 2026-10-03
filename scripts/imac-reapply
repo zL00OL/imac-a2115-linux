@@ -244,14 +244,32 @@ say ""; say "[sddm greeter]"
 # QT_SCALE_FACTOR: the greeter runs on Xorg at 96 DPI on a 5K panel.
 SDW=/usr/local/lib/sddm/greeter-xsetup.sh
 SDC=/etc/sddm.conf.d/50-greeter-dpi.conf
-if [ -x "$SDW" ] && grep -q "$SDW" "$SDC" 2>/dev/null; then
-  ok "greeter DPI wrapper wired in ($SDC)"
+# DisplayCommand is a [Theme] option in SDDM. When it was set in [X11] only, the
+# greeter stayed at 100% because SDDM never read it from there. Check [Theme].
+if [ -x "$SDW" ] && awk '/^\[Theme\]/{t=1;next} /^\[/{t=0} t&&/^DisplayCommand=.*greeter-xsetup/{f=1} END{exit !f}' "$SDC" 2>/dev/null; then
+  ok "greeter DisplayCommand wired in [Theme] of $SDC"
 elif [ -f "$SDC" ]; then
-  warn "$SDC exists but does not reference $SDW"
-  hint "check DisplayCommand in $SDC"
+  bad "$SDC has no DisplayCommand inside [Theme] - SDDM will ignore it"
+  hint "DisplayCommand belongs in [Theme], not [X11]"
 else
   bad "greeter DPI config missing"
   hint "restore /etc/sddm.conf.d/50-greeter-dpi.conf and $SDW"
+fi
+if [ -f "$SDC" ] && grep -q '^GreeterEnvironment=' "$SDC" 2>/dev/null; then
+  ok "Qt6 greeter scale factors set: $(grep -m1 '^GreeterEnvironment=' "$SDC" | cut -c1-70)"
+else
+  warn "no GreeterEnvironment - the Qt6 greeter may render at 100%"
+fi
+# Session restore reopens every window at login.
+# Use an explicit home: this script runs under sudo, where $HOME is /root.
+UHOME=${SUDO_USER:+$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)}
+[ -n "$UHOME" ] || UHOME=/home/ilya
+KSMRC=$UHOME/.config/ksmserverrc
+if grep -qx 'restoreOnLogin=false' "$KSMRC" 2>/dev/null; then
+  ok "session restore disabled (windows will not reopen at login)"
+else
+  warn "session restore still enabled - windows reopen at login"
+  hint "printf '\n[Session]\nrestoreOnLogin=false\n' >> ~/.config/ksmserverrc"
 fi
 [ -x "$SDW" ] || warn "wrapper $SDW missing or not executable"
 say "  applies at next login (never restart sddm mid-session)"
