@@ -61,7 +61,11 @@ packaged system rusticl, which openSUSE does not currently provide.
 
 ### The one legitimate part
 
-Registering the ICD alone is harmless and is still worth doing:
+Two things are legitimate, and neither requires a global linker change:
+
+1. **Set `RUSTICL_ENABLE=radeonsi` for Resolve.** See the Resolve section — this
+   is the actual missing piece and it is process-scoped.
+2. **Register the ICD** so the loader can find the driver:
 
 ```bash
 # /etc/OpenCL/vendors/rusticl.icd
@@ -113,9 +117,39 @@ source builds were used during development. On any other distro, skip all of thi
 
 ### Runtime
 
-- Uses the **system** `libOpenCL.so.1`, so it picks up the rusticl GPU.
-- Logs `Matches: OpenCL`, 4 GiB VRAM, no compatibility warning.
+- Uses the **system** `libOpenCL.so.1`, so it picks up rusticl — but only if
+  rusticl advertises the GPU. See below.
 - Owns APR, so system APR is unused at runtime.
+
+### The missing piece: `RUSTICL_ENABLE=radeonsi`
+
+Rusticl **does not advertise OpenCL for any GPU driver by default** — the
+upstream default is deliberately empty while the driver matures. So a
+correctly installed rusticl can still leave Resolve reporting no OpenCL-capable
+GPU, with no error anywhere.
+
+```bash
+RUSTICL_ENABLE=radeonsi clinfo          # device appears
+RUSTICL_ENABLE=radeonsi /opt/resolve/bin/resolve
+```
+
+This is the **per-process** fix the earlier global `ld.so.conf` approach should
+have used. It is now in `reference/resolve-200` and in the `.desktop` `Exec`
+line, so it applies to Resolve only and cannot affect KWin or anything else.
+
+Rusticl support in Resolve landed upstream in Mesa MR 21305 (commit
+`0a072bb3`), so any Mesa from roughly 24.0 onward qualifies. The Arch Wiki
+lists a Radeon RX 7600 working with exactly this variable.
+
+> The Arch Wiki does warn that **pre-Vega** GPUs can crash Resolve when using
+> `opencl-amd` together with Mesa. That warning is about ROCm, not rusticl —
+> and rusticl has reported this machine's Radeon Pro 580 as 28 compute units
+> and OpenCL 3.1, so the rusticl path is viable here.
+
+**Status: not yet verified end to end.** GPU OpenCL was working when the global
+linker hack was in place, but that hack also broke the graphical login and had
+to be reverted. What has never been tested is rusticl + `RUSTICL_ENABLE` with
+**no** global linker change. That is the configuration to try next.
 
 ### UI scaling — Qt 5.15 quirk
 
