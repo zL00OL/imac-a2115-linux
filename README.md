@@ -74,6 +74,7 @@ before changing anything.
 | `scripts/imac-audio-fix` | **apply the iMac19,1 speaker fixes** (power_save, driver, 4ch) — start here |
 | `scripts/imac-audio-module` | build/install a CS8409 codec module for a kernel (never DKMS) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
+| `reference/resolve-200` | Resolve launcher: 200% scaling + `RUSTICL_ENABLE` |
 | `THIRD_PARTY_NOTICES.md` | credits for every upstream project relied on |
 
 ## Credits
