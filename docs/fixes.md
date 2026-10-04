@@ -219,22 +219,93 @@ high-DPI by default.
 
 ---
 
-## SDDM greeter DPI
+## SDDM greeter at 200% — the recipe that actually works
 
-The greeter rendered tiny because Xorg reports **96 DPI** and a 1354x762mm
-screen on a panel that is really 600x340mm (~217 DPI). Themes that size from
-reported DPI draw 1:1 into a 5120x2880 window.
+**Verified working on this machine 2026-10-04.** Five earlier attempts in this
+file were wrong and are described below so they are not repeated.
 
-Fixed by wrapping the greeter's X setup so the display reports true DPI before
-Qt starts:
+The working config is `/etc/sddm.conf.d/hidpi.conf`:
 
-- `/usr/local/lib/sddm/greeter-xsetup.sh`
-- wired via `DisplayCommand=` in `/etc/sddm.conf.d/50-greeter-dpi.conf`,
-  in both `[X11]` and `[XDisplay]` (openSUSE's `00-general.conf` uses the legacy
-  name; SDDM 0.21 accepts either)
+```ini
+[General]
+GreeterEnvironment=QT_SCREEN_SCALE_FACTORS=2.0,QT_FONT_DPI=192
 
-Greeter-only. The Plasma session is Wayland and unaffected. **Takes effect at
-next login** — never restart sddm mid-session.
+[Wayland]
+EnableHiDPI=true
+
+[X11]
+EnableHiDPI=true
+ServerArguments=-nolisten tcp -dpi 192
+```
+
+### The three things that were wrong before
+
+**1. The separator in `GreeterEnvironment` is a COMMA, not a semicolon.**
+
+```
+GreeterEnvironment=QT_SCREEN_SCALE_FACTORS=2.0,QT_FONT_DPI=192     works
+GreeterEnvironment=QT_A=1;QT_B=2                                    silently ignored
+```
+
+The whole variable list is parsed with commas. A semicolon makes SDDM treat the
+entire string as one malformed variable name and discard it — with no error
+anywhere, which is why it looked like the setting had no effect.
+
+**2. `EnableHiDPI` belongs in `[Wayland]` and `[X11]`, not `[Theme]`.**
+
+The `sddm.conf(5)` man page lists it under `[Theme]`, which is misleading. It
+is read per display-server section. This greeter runs under **kwin_wayland**, so
+`[Wayland]` is the section that matters; `[X11]` is kept for the fallback path.
+
+**3. `DisplayCommand` is useless here, and was actively harmful.**
+
+`DisplayCommand` runs as **root** only when `General.DisplayServer` is `x11`.
+This greeter is Wayland, so it runs as the `sddm` user — an `xrandr --dpi` call
+there cannot work. Worse, setting `DisplayCommand` *replaces* SDDM's default
+`/usr/share/sddm/scripts/Xsetup` with the wrapper, so a wrapper that does nothing
+useful silently disables the stock one. A previous version of this file shipped
+exactly that wrapper and it never ran.
+
+### Also note
+
+- The greeter is **Qt 6** (`sddm-greeter-qt6`) on **Wayland** (`kwin_wayland`),
+  with theme `McMojave`.
+- `EnableHiDPI` defaults to `true` already, but Qt derives scale from the DPI the
+  greeter reports. The panel reports **96 DPI** at 5120x2880, so Qt correctly
+  picks 1x and draws the UI 1:1 — tiny. The scale must be forced explicitly.
+- Because there is no SDDM `sddm` PAM service file in `/etc/pam.d` on this
+  system (the package ships it as `/usr/lib/pam.d/sddm`), PAM falls back to a
+  compiled-in permissive default. `pam_kwallet` therefore never ran at graphical
+  login until `/etc/pam.d/sddm` was symlinked into place. See the wallet section.
+
+---
+
+## KDE Wallet prompting at login — the actual fix
+
+**The wallet had a password.** Setting the wallet's password to **empty**
+stops the prompt, because there is then nothing to unlock:
+
+```
+System Settings → Account Details → KDE Wallet → password: (blank)
+```
+
+or equivalently `kwalletmanager5`.
+
+### What got it wrong first
+
+A long detour concluded that `pam_kwallet5.so` could not hand the password to
+`kwalletd6`, because `kwalletd6` contains **no socket strings** and the PAM
+mechanism passes the login password over a unix socket. On that reasoning the
+PAM entries were commented out — which was a mistake, since the entries were
+innocent and had been silently doing nothing for a different reason. They have
+been restored.
+
+The advice to create a `kdewallet` whose password matches the login password is
+also unnecessary here: with an empty wallet password, `kdewallet` is never
+prompted for at all.
+
+`autoUnload=false` in `~/.config/kwalletrc` was also added, to stop the wallet
+re-locking if it ever does hold a password.
 
 ---
 

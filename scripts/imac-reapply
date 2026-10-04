@@ -242,26 +242,47 @@ fi
 say ""; say "[sddm greeter]"
 # The greeter is fixed by a DPI-deriving DisplayCommand wrapper, NOT by
 # QT_SCALE_FACTOR: the greeter runs on Xorg at 96 DPI on a 5K panel.
-SDW=/usr/local/lib/sddm/greeter-xsetup.sh
-SDC=/etc/sddm.conf.d/50-greeter-dpi.conf
-# DisplayCommand is a [Theme] option in SDDM. When it was set in [X11] only, the
-# greeter stayed at 100% because SDDM never read it from there. Check [Theme].
-if [ -x "$SDW" ] && awk '/^\[Theme\]/{t=1;next} /^\[/{t=0} t&&/^DisplayCommand=.*greeter-xsetup/{f=1} END{exit !f}' "$SDC" 2>/dev/null; then
-  ok "greeter DisplayCommand wired in [Theme] of $SDC"
-elif [ -f "$SDC" ]; then
-  bad "$SDC has no DisplayCommand inside [Theme] - SDDM will ignore it"
-  hint "DisplayCommand belongs in [Theme], not [X11]"
+# The greeter is Qt6 on Wayland (kwin_wayland). Scale it with these keys -
+# verified working 2026-10-04.
+#
+# Two traps this check exists to catch:
+#   * GreeterEnvironment separates variables with COMMAS. A semicolon makes SDDM
+#     discard the whole string silently, which looks like the setting does
+#     nothing at all.
+#   * EnableHiDPI is read from [Wayland] and [X11], NOT [Theme] as the
+#     sddm.conf(5) man page implies.
+say "  --- greeter (Qt6 / Wayland) ---"
+GE=""
+HIDPI=0
+for f in /etc/sddm.conf /etc/sddm.conf.d/*.conf; do
+  [ -f "$f" ] || continue
+  g=$(awk '/^\[General\]/{t=1;next} /^\[/{t=0} t&&/^GreeterEnvironment=/{print;exit}' "$f" 2>/dev/null)
+  [ -n "$g" ] && GE="$g"
+  if grep -qE '^EnableHiDPI=true' "$f" 2>/dev/null; then HIDPI=1; fi
+done
+if [ -n "$GE" ]; then
+  ok "GreeterEnvironment set: $(echo "$GE" | cut -c1-64)"
+  case "$GE" in
+    *";"*) bad "GreeterEnvironment uses SEMICOLONS - SDDM needs COMMAS"
+           hint "separate the variables with , instead of ;" ;;
+    *",QT_"*) ok "comma-separated (correct for SDDM)" ;;
+    *)       warn "only one variable present - if scaling is still wrong, check the separators" ;;
+  esac
+  case "$GE" in
+    *QT_SCREEN_SCALE_FACTORS*) ok "Qt6 scale factor present for the greeter" ;;
+    *) warn "QT_SCREEN_SCALE_FACTORS missing from GreeterEnvironment" ;;
+  esac
 else
-  bad "greeter DPI config missing"
-  hint "restore /etc/sddm.conf.d/50-greeter-dpi.conf and $SDW"
+  bad "GreeterEnvironment not set - the greeter will render at 100%"
+  hint "in [General]: GreeterEnvironment=QT_SCREEN_SCALE_FACTORS=2.0,QT_FONT_DPI=192"
 fi
-if [ -f "$SDC" ] && grep -q '^GreeterEnvironment=' "$SDC" 2>/dev/null; then
-  ok "Qt6 greeter scale factors set: $(grep -m1 '^GreeterEnvironment=' "$SDC" | cut -c1-70)"
+if [ "$HIDPI" -eq 1 ]; then
+  ok "EnableHiDPI=true present (must be in [Wayland] and/or [X11], not [Theme])"
 else
-  warn "no GreeterEnvironment - the Qt6 greeter may render at 100%"
+  bad "EnableHiDPI=true not set"
+  hint "set it under [Wayland] and [X11]"
 fi
-# Session restore reopens every window at login.
-# Use an explicit home: this script runs under sudo, where $HOME is /root.
+# session restore reopens every window at login.
 UHOME=${SUDO_USER:+$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)}
 [ -n "$UHOME" ] || UHOME=/home/ilya
 KSMRC=$UHOME/.config/ksmserverrc
@@ -269,9 +290,8 @@ if grep -qx 'restoreOnLogin=false' "$KSMRC" 2>/dev/null; then
   ok "session restore disabled (windows will not reopen at login)"
 else
   warn "session restore still enabled - windows reopen at login"
-  hint "printf '\n[Session]\nrestoreOnLogin=false\n' >> ~/.config/ksmserverrc"
+  hint "printf '\\n[Session]\\nrestoreOnLogin=false\\n' >> $KSMRC"
 fi
-[ -x "$SDW" ] || warn "wrapper $SDW missing or not executable"
 say "  applies at next login (never restart sddm mid-session)"
 
 #--------------------------------------------------------------------- resolve
