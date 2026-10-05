@@ -5,11 +5,23 @@
 #  - is a P3 ICC profile applied or available?
 # Read-only. Nothing is probed or enabled here.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
-PW=$(mktemp)
-printf '%s\n' 'REDACTED' > "$PW"
-chmod 600 "$PW"
-S() { sudo -S -p '' "$@" <"$PW"; }
-trap 'rm -f "$PW"' EXIT
+# Authenticate once, up front, and let sudo prompt normally.
+#
+# This script used to write a plaintext sudo password to a temp file and pipe it
+# into `sudo -S`. That put a real credential in a public repository, and the
+# pattern is wrong anyway: a diagnostic has no business handling a password.
+# The credentials are not merely stripped from the current file, they remain in
+# git history - treat any password that was ever committed here as compromised
+# and rotate it.
+if ! sudo -n true 2>/dev/null; then
+  echo "This audit reads a few /sys and /proc paths that need root." >&2
+  echo "Authenticate first, then re-run:" >&2
+  echo >&2
+  echo "    sudo -v && $0" >&2
+  echo >&2
+  exit 1
+fi
+S() { sudo -n "$@"; }
 
 echo "=== 1. GPUs present in PCI ==="
 S lspci -nn | grep -iE "vga|display|3d" | sed 's/^/  /'
