@@ -1,6 +1,6 @@
 # iMac 5K (A2115) — seamless tiled 5K on Linux
 
-**Goal: one seamless 5120x2880 desktop across both panels, no seam, no black gap.**
+**Goal: one seamless 5120x2880 desktop across both panels, no seam**
 Everything else in this repo is secondary.
 
 Hardware: iMac 19,1 / A2115, Radeon RX 580 (`polaris10`), Intel i5-8500.
