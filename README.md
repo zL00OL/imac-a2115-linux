@@ -39,12 +39,17 @@ environment. Because it happens below the display server, both the Wayland
 session and the X11 greeter get it, and the desktop environment sees a single
 5120x2880 output rather than two monitors.
 
-Tiling is controlled by one kernel module parameter:
+Tiling is controlled by one kernel module parameter, **which only exists in the
+patched driver** — stock `amdgpu` has 96 parameters and no `tiled_stitch`:
 
 ```
-amdgpu.tiled_stitch=1     # tile the two links into one framebuffer  (what you want)
-amdgpu.tiled_stitch=0     # two separate displays                    (default)
+amdgpu.tiled_stitch=-1    # tile the two links into one framebuffer  (verified working)
 ```
+
+`-1` is the value this machine boots with and the value verified to produce the
+5120x2880 output. Earlier revisions of these docs said `=1`; that value has
+**never been tested here**, so treat it as unverified rather than as an
+alternative. If you are reproducing this, use `-1`.
 
 The parameter is applied when the kernel command line is parsed, so a change
 requires a reboot. Verify it is actually in effect rather than assuming:
@@ -70,6 +75,8 @@ before changing anything.
 |---|---|
 | `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
 | `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
+| `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order |
+| `LICENSE` | MIT (own work; vendored patches keep upstream terms) |
 | `docs/hardware.md` | machine facts, quirks, the Stack C myth |
 | `docs/fixes.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
@@ -104,7 +111,7 @@ AMD graphics team.
 **Tiled 5K: working, and seamless is confirmed** — one 5120x2880 desktop with no
 visible gap or displacement across the midline. This depends on a **patched
 `amdgpu` carried inside the custom `initrd-stackC`** plus
-`amdgpu.tiled_stitch=1`. It is not stock, and rebuilding or replacing that
+`amdgpu.tiled_stitch=-1`. It is not stock, and rebuilding or replacing that
 initramfs is the single most destructive thing you can do to this machine.
 
 **Known remaining fault:** the panel sometimes fails to initialise on a cold

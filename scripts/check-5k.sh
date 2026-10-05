@@ -25,7 +25,8 @@ echo "=============================================================="
 hr; echo "1. KERNEL TILING PARAMETER"
 if [ -r /sys/module/amdgpu/parameters/tiled_stitch ]; then
   T=$(cat /sys/module/amdgpu/parameters/tiled_stitch)
-  if [ "$T" = "1" ]; then good "tiled_stitch=1 (tiling ON)"
+  if [ "$T" = "-1" ]; then good "tiled_stitch=-1 (tiling ON, the verified value)"
+  elif [ "$T" = "1" ]; then warn "tiled_stitch=1 — UNVERIFIED on this machine; the docs standardise on -1"
   else bad "tiled_stitch=$T (tiling OFF - two separate displays)"; fi
 else
   bad "/sys/module/amdgpu/parameters/tiled_stitch missing"

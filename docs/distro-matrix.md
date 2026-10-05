@@ -38,13 +38,13 @@ Two consequences to keep in mind:
 
 ---
 
-## Tier 1: portable to any Linux distro
+## Tier 1: hardware properties, not distro properties
 
-These are hardware properties, not distro properties.
+Mostly portable in principle. The exception is the 5K panel row above, which is **verified on one machine only** — treat it as such until someone reproduces it elsewhere.
 
 | Item | Notes |
 |---|---|
-| `amdgpu.tiled_stitch=1` | A kernel module parameter, not a patch. Works on any distro with kernel 6.x+ and amdgpu. **This is all that is needed for seamless 5K.** |
+| Seamless 5K on the A2115 panel | **Not portable as previously claimed.** It needs a **patched `amdgpu`** (see `patches/amdgpu-5k/`) built into a custom initramfs, plus `amdgpu.tiled_stitch=-1`. Verified on **openSUSE Slowroll, kernel 7.2.2-1-default** only. Portability to other kernels or distros is **not established**. |
 | `imac-reapply` / `imac-update` model | An idempotent script that re-establishes local customisations after an update. Valid anywhere; the checks inside need per-distro edits. |
 | The `cs8409` audio DKMS module | Tied to this **hardware**, so it follows the machine across distros. |
 | PipeWire chain format | The syntax is portable, but the **coefficients are tuned to these speakers** and must be re-measured on different hardware. |
@@ -52,19 +52,23 @@ These are hardware properties, not distro properties.
 
 ## Tier 2: the seamless 5K recipe, per distro
 
-Only one thing is required.
+Three things are required. This list previously said one, which is what made the recipe look portable when it is not.
+
+1. **A patched `amdgpu`** built from `patches/amdgpu-5k/` — stock amdgpu has no `tiled_stitch` parameter at all.
+2. **A custom initramfs containing that module**, loaded by the boot entry.
+3. **The kernel command line parameter** below.
 
 **Kernel command line** — append to your boot entry's `options=` line:
 
 ```
-amdgpu.tiled_stitch=1
+amdgpu.tiled_stitch=-1
 ```
 
 | Distro | Where to put it |
 |---|---|
 | openSUSE | `/boot/efi/loader/entries/*.conf`, `options=` line |
 | Arch | `/boot/loader/entries/*.conf`, or `/etc/kernel/cmdline` + `grub-mkconfig` |
-| Fedora | `grubby --update-kernel=ALL --args=amdgpu.tiled_stitch=1` |
+| Fedora | `grubby --update-kernel=ALL --args=amdgpu.tiled_stitch=-1` |
 | Debian/Ubuntu | `/etc/default/grub.d/` snippet, or `GRUB_CMDLINE_LINUX_DEFAULT` |
 | NixOS | `boot.kernelParams` |
 
@@ -100,6 +104,6 @@ is **fractional scaling** — force scale `1` first.
 amdgpu-stackC-async.ko
 ```
 
-Known-bad, and must never be installed or loaded. See
-`docs/hardware.md#the-stack-c-myth`. The "Stack C" patched driver was a
-misdiagnosis; the stock driver plus `tiled_stitch=1` is the entire fix.
+Known-bad, and must never be installed or loaded.
+
+An earlier revision of this file called the patched driver a misdiagnosis. It was not — the patched driver is what runs. `docs/hardware.md` records the measurement that settles it; see `docs/hardware.md#the-amdgpu-that-is-actually-loaded`.

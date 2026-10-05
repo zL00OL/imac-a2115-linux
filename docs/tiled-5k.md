@@ -31,7 +31,7 @@ To change it, edit the kernel command line in the boot entry you actually use:
 ```bash
 # find your default entry
 grep -m1 '^default' /boot/efi/loader/loader.conf
-# add tiled_stitch=1 to its options= line
+# add tiled_stitch=-1 to its options= line
 sudoedit /boot/efi/loader/entries/<that-entry>.conf
 ```
 
@@ -225,10 +225,15 @@ correct while the physical seam is still visible.
 ## 7. What has actually been verified here
 
 **Confirmed working and seamless.** One 5120x2880 desktop, no gap, no
-displacement across the midline, with a **patched** `amdgpu` supplied by the
-custom initramfs (see below) and
-`amdgpu.tiled_stitch=1`. No patched module, no EDID override, no per-connector
-fixes were needed.
+displacement across the midline. This needs a **patched** `amdgpu` — built from
+`patches/amdgpu-5k/` and supplied by the custom initramfs — together with
+`amdgpu.tiled_stitch=-1`. No EDID override and no per-connector fixes were needed
+beyond what the patch itself does.
+
+The next section is the authority on which driver is actually loaded and how to
+confirm it on your own machine. Read it before changing anything: an earlier
+revision of this file claimed the stock driver was sufficient, which was wrong
+and would have cost a reader the second tile.
 
 If someone reproduces this on similar hardware and *does* see a seam, the checks
 in section 3 are still the right starting point — but note that this machine did
@@ -238,10 +243,14 @@ scaling: force scale `1` on the tiled output before investigating anything else.
 Recording any future change here as you test is worthwhile.
 ---
 
-## Correction: the running `amdgpu` is patched, not stock
+## Which `amdgpu` is actually loaded, and why it is not the stock one
 
-This file previously claimed the seamless 5K came from the stock driver plus
-`amdgpu.tiled_stitch=1`. That is wrong, and the evidence is unambiguous:
+This is the load-bearing fact for everything above, and it is worth stating
+plainly because getting it wrong is expensive: **the stock driver cannot do
+this.**
+
+Earlier revisions of this file claimed the seamless 5K came from the stock driver
+plus `amdgpu.tiled_stitch=1`. That was wrong, and the evidence is unambiguous:
 
 ```
 loaded  /sys/module/amdgpu/srcversion  : 6BE242C1C62DD79046F2E9A

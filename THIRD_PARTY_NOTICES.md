@@ -45,17 +45,24 @@ trace the 5K work further upstream: **mforce2** (tile wake), **erik2** (stitch),
 Polaris GPU-hang fix and reset patches were reported upstream in
 [drm/amd#5810](https://gitlab.freedesktop.org/drm/amd/-/issues/5810).
 
-The **`amdgpu.tiled_stitch=1`** parameter that makes this work is an upstream
-Linux kernel feature from the AMD driver team — not the invention of any of the
-projects above, and not a patch.
+The **`amdgpu.tiled_stitch` parameter** that makes this work is not a stock
+`amdgpu` feature. Stock amdgpu has 96 module parameters and no `tiled_stitch`;
+the parameter arrives with `imac5k-stitch-layer-7.x.patch` in
+`patches/amdgpu-5k/`. The underlying tile-wake and stitch *technique* traces to
+the projects named above and to AMD's driver team, but on this hardware it is
+reachable only through the patch set — this repository previously stated the
+opposite and was wrong.
 
 ### A note on "Stack C"
 
 The `Stack C` naming used in earlier notes on this machine came from the
 universal-patcher lineage above. On this hardware it was ultimately **not
-needed**: the stock `amdgpu` driver plus `amdgpu.tiled_stitch=1` produces a
-seamless 5K desktop. See `docs/hardware.md#the-stack-c-myth` and
-`docs/tiled-5k.md`.
+needed as originally documented**: an earlier revision of this file claimed the
+stock driver plus `amdgpu.tiled_stitch` was sufficient. That was wrong, and
+`docs/hardware.md` records the measurement that disproves it. The stock driver
+has no `tiled_stitch` parameter at all. The patched driver, built from
+`patches/amdgpu-5k/` and loaded from `initrd-stackC`, is what produces the
+seamless 5K desktop here.
 
 Anyone reproducing this on a **different** iMac generation should check those
 repos first — some models genuinely do need patched display drivers. This

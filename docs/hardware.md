@@ -10,31 +10,61 @@
 | CPU | Intel Core i5-8500, 6 threads, x86-64 |
 | RAM | 31.2 GiB |
 | GPU | AMD Ellesmere / Radeon RX 470-580 family (`polaris10`), 4 GiB VRAM |
-| Kernel driver | `amdgpu` (stock) |
+| Kernel driver | `amdgpu`, **patched** (6-patch 5K stack), loaded from `initrd-stackC` |
 | Display | 5120x2880, tiled by `amdgpu.tiled_stitch=-1` |
 
-## The "Stack C" myth
+## The amdgpu that is actually loaded
 
-Earlier project notes described a hand-built, patched `amdgpu` module called
-"Stack C", with an expected module `srcversion` of `6BE...`.
+This section previously claimed the opposite of the truth. It is rewritten here
+with the measurement that settles it, because the earlier claim was actively
+dangerous: it told a reader that rebuilding the initramfs was harmless.
 
-**This was wrong.** Verified state:
+### Measured state
 
-- Live module srcversion is `4FA5DDFCFF3DDAE9F5FE22E` — **stock**.
-- No initramfs on this machine contains a patched `amdgpu`. The artefacts named
-  `initrd-stackC` and `initrd-stackC-ply` are ordinary dracut initramfs with a
-  stock module inside; only the *filename* is misleading.
-- The 5K tiled output works because of the kernel parameter
-  `amdgpu.tiled_stitch=-1`, nothing more.
+```
+LOADED module     /sys/module/amdgpu/srcversion = 6BE242C1C62DD79046F2E9A
+                  97 module parameters (stock has 96; the extra one is tiled_stitch)
 
-Consequences:
+/lib/modules copy amdgpu.ko.zst   srcversion = 4FA5DDFCFF3DDAE9F5FE22E
+                                  96 parameters, no tiled_stitch
+```
 
-- **Never install or load `amdgpu-stackC-async.ko`.** The async variant is
-  known-bad.
-- Loose files like `/home/<user>/5k-build-c/amdgpu-stackC-stitch.ko` are leftovers.
-  They are not loaded and not needed.
-- If you are auditing this machine, judge the driver by
-  `modinfo -F srcversion amdgpu`, not by filenames.
+There are two different `amdgpu` builds on this machine and **the patched one is
+the one that runs**:
+
+- The **`/lib/modules` copy is stock** — byte-identical to the `amdgpu.ko.zst.stock`
+  kept beside it.
+- The **running module is patched**, srcversion `6BE...`, loaded out of the custom
+  initramfs `initrd-stackC` that the boot entry references.
+
+### Why the earlier "Stack C is a myth" claim was wrong
+
+It was derived from `modinfo -F srcversion amdgpu`, which resolves a module from
+the `/lib/modules` search tree. That returns `4FA5...` — the **stock** copy. It
+does not report the module actually loaded, because the loaded module did not
+come from `/lib/modules`; it came out of the initramfs.
+
+So the method reported the on-disk stock copy and the conclusion drawn was
+"therefore the running driver is stock." The `6BE...` prefix that the earlier
+notes predicted was right all along, and the note dismissing it as a myth was
+the error.
+
+**This is the same mistake `check-5k.sh` makes.** Judge the running driver by
+`/sys/module/amdgpu/srcversion`, never by `modinfo` alone.
+
+### Consequences
+
+- **Do not rebuild or replace `initrd-stackC` casually.** A stock `amdgpu` cannot
+  accept `amdgpu.tiled_stitch` at all — the parameter does not exist in it — so a
+  stock initramfs means losing the second tile and with it the 5120x2880 desktop.
+  See `docs/tiled-5k.md`.
+- The patched build comes from `patches/amdgpu-5k/` in this repository, pinned
+  and hashed. See `patches/amdgpu-5k/README.md` and `docs/kernel-updates.md`.
+- Loose files like `~/5k-build-c/amdgpu-stackC-stitch.ko` are leftovers from
+  building it. They are not loaded and not needed; the module that runs lives in
+  the initramfs.
+- The patched module must be rebuilt for **every** kernel, and its vermagic must
+  match the kernel it is loaded into.
 
 ## Known-bad: never install this
 
