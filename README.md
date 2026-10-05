@@ -11,8 +11,7 @@ Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2.
 > previously documented as stock and was wrong. The patched module is embedded
 > inside the custom `initrd-stackC` initramfs (`--add-drivers 'amdgpu'`), which
 > is why the copies under `/lib/modules` all look stock and `rpm -V` reports
-> the kernel package intact. See `docs/tiled-5k.md
-  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**` for how to confirm which
+> the kernel package intact. See `docs/tiled-5k.md` for how to confirm which
 > module is actually loaded. Do **not** additionally install a patched
 > `amdgpu.ko` into `/lib/modules` — the initramfs one is already in use.
 > Anything named `amdgpu-stackC-*.ko` is a leftover; the `async` variant is
@@ -28,8 +27,7 @@ sudo scripts/check-5k.sh
 ```
 
 That script is the fastest way to tell *which* of the distinct failure modes you
-have. Read `docs/tiled-5k.md
-  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**` for what each result means and how to fix it.
+have. Read `docs/tiled-5k.md` for what each result means and how to fix it.
 
 ---
 
@@ -57,8 +55,7 @@ grep tiled_stitch /proc/cmdline                   # expect the flag
 ```
 
 If `tiled_stitch` is not a parameter your kernel exposes, the driver has
-dropped or renamed it — see `docs/tiled-5k.md
-  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**#parameter-missing`.
+dropped or renamed it — see `docs/tiled-5k.md#parameter-missing`.
 
 ---
 
@@ -71,8 +68,8 @@ before changing anything.
 
 | Path | |
 |---|---|
-| `docs/tiled-5k.md
-  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**` | **the seam**: diagnosis and fixes — read this |
+| `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
+| `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
 | `docs/hardware.md` | machine facts, quirks, the Stack C myth |
 | `docs/fixes.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
@@ -118,22 +115,55 @@ initramfs is the single most destructive thing you can do to this machine.
 **Known remaining fault:** the panel sometimes fails to initialise on a cold
 boot, leaving the machine unreachable for hours. Root cause is traced to an
 insufficient AUX-wake retry budget in the DP link-training loops. Unfixed —
-see `docs/tiled-5k.md
-  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**`.
+see `docs/tiled-5k.md`.
 
-Everything else is documented but **unresolved or actively harmful as configured**:
+Beyond the seam, these are the current facts on this machine.
 
-- **Audio: root cause found, fix prepared, not yet verified.** Rear pair works,
-  front pair silent. Two documented causes, both on this exact model:
-  HDA runtime power management suspends the controller that powers the CS8409's
-  I2C bridge, so the amplifiers are never programmed; and the codec's middle TDM
-  slots are corrupted, so only 2 of 4 channels play. Run
-  `sudo scripts/imac-audio-fix`. See the audio section of `docs/fixes.md`.
-- **Plymouth: suspected of hanging the boot.** It has never once rendered on
-  this panel, and a boot through `initrd-stackC-ply` stalled before the network
-  came up, which on an unattended machine means physical access to recover.
-  **Do not make `5k-stackc-plymouth.conf` the default entry.**
-- **GPU OpenCL: absent.** The workaround that briefly worked broke the
-  graphical login and has been reverted; the code that performed it is deleted.
+**Working, and verified rather than assumed:**
 
-`docs/fixes.md` records what is broken as carefully as what works.
+- **Internal speakers.** Both pairs play. The old "rear pair works, front pair
+  silent" symptom was not a broken amplifier path — it was the codec
+  enumerating as a 4-channel sink (`analog-surround-40`), where only the woofer
+  path misbehaves. On the 2-channel `analog-stereo` enumeration everything plays
+  cleanly, with no configuration change required. See
+  `docs/fixes.md`.
+- **GPU OpenCL.** Working, verified in DaVinci Resolve: `RUSTICL_ENABLE=radeonsi`,
+  an `LD_LIBRARY_PATH` pointing only at `/opt/resolve/rusticl-libs`, and libclc
+  staged under `/usr/lib/x86_64-linux-gnu/GL/default/share/clc/`. Use
+  `reference/resolve-200`.
+- **Printing.** Driverless AirPrint, no vendor driver — the printer is
+  Mopria-certified. Queue `HP_M141w`.
+- **Bluetooth, with a documented limit.** Usable via `hci_uart`+`btbcm` with
+  `ClassicBondedOnly=false` and USB autosuspend disabled. This chip does **not**
+  bond, which is the underlying cause of the dropouts; a USB dongle is the
+  reliable fix.
+- **SDDM greeter and KWallet.** Both fixed; see the greeter page for the working
+  configuration and the two traps in it.
+
+**Known remaining faults:**
+
+- **Cold-boot 5K failure.** The panel sometimes fails to initialise on a cold
+  boot, which on an unattended machine means physical access to recover. Root
+  cause is traced to an insufficient AUX-wake retry budget in the DP
+  link-training loops. **Still unfixed.** A patch that appears to address it
+  exists — see `docs/kernel-updates.md` — but it is not yet built or verified
+  here.
+- **No microphone.** The CS8409 exposes no capture device at all. The driver's
+  own notes describe input as unfinished. Driver work, not configuration.
+- **No fan control.** No fan-speed daemon, so the exhaust fan is not thermally
+  curved the way macOS curves it.
+- **Hibernate is offered but cannot work** — no `resume=` on the kernel command
+  line.
+- **A speaker EQ is not achievable.** PipeWire's `filter-chain` module fails to
+  initialise on this machine, and with `nofail` it fails silently — audio
+  bypasses the EQ while every tool reports success. This is also why the
+  Apple-derived tuning in the repo is parked.
+
+**Removed, with measurements:**
+
+- **Plymouth.** Deleted. It never once rendered on this panel, and a boot
+  through `initrd-stackC-ply` stalled before the network came up. Measured as
+  harmful; the backup is retained.
+
+`docs/fixes.md` records what is broken as carefully as what works, including the
+approaches that were tried and did not work.
