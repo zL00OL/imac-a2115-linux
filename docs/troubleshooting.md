@@ -186,3 +186,36 @@ the whole transaction**: requesting a non-existent `libsqlite3-devel` alongside
 `libexpat-devel` aborted the transaction and left the header uninstalled, with
 no obvious link between the request and the failure. Install dependencies
 individually when unsure.
+
+## A kernel update left me with one tile and no speakers
+
+Expected, not a broken update. See **[kernel updates](kernel-updates.md)**. A new
+kernel arrives with no CS8409 DKMS module and no patched `amdgpu`, because
+`dkms.service` ships disabled and the patched driver only exists inside the
+initramfs on the ESP. Fix with `sudo systemctl enable dkms.service`,
+`sudo dkms autoinstall`, and a rebuilt patched `amdgpu`.
+
+## Sleeping does nothing / Sleep missing from the power menu
+
+The sleep targets are masked or `sleep.conf` is misconfigured. Check with
+`systemctl is-enabled sleep.target suspend.target hibernate.target` — all three
+should be `static`, not `masked`. Note that `HandleLidSwitch*` belongs in
+`logind.conf`, **not** `sleep.conf`; putting it in `sleep.conf` is silently
+ignored. Full detail in **[fixes](fixes.md#sleep--restored-to-stock-and-a-config-file-that-was-doing-nothing)**.
+
+## Bluetooth headphones drop out, or devices never appear
+
+The iMac19,1 Bluetooth is `hci_uart` + `btbcm`, not `btusb`, and this chip does
+not support bonding. Set `ClassicBondedOnly=false` under `[Policy]` in
+`/etc/bluetooth/main.conf` and set `USBAutosuspend=0` (it defaults to 2 seconds
+here, which suspends the internal UART bridge repeatedly). This improves
+stability but does not add bonding; a USB dongle is the reliable fix. See
+**[fixes](fixes.md#bluetooth--fixed-enough-to-be-usable-but-bonding-does-not-work)**.
+
+## Printer works on the network but not in the print dialog
+
+Almost always a stale queue pointing at an old DHCP address. Check
+`lpstat -v` and compare with the printer's real address, and prefer a driverless
+queue over a vendor one — an HP LaserJet MFP M141w advertises
+`mopria-certified=2.1` and needs no driver. See
+**[fixes](fixes.md#printing--airprint-driverless)**.

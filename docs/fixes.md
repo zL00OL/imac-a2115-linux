@@ -627,6 +627,160 @@ Without filter-chain there is no way to reproduce it, so these speakers will
 sound thinner and brighter than the same machine under macOS. That is a driver
 limitation, not a misconfiguration.
 
+## Bluetooth — fixed enough to be usable, but bonding does not work
+
+Bluetooth on this machine is **not** `btusb`. It is the Broadcom BCM4364 combo
+chip exposed over **UART**:
+
+```
+module in use: hci_uart btbcm
+Controller 3C:22:FB:B1:00:2C imac
+```
+
+That is the known-problematic path for this chip, and it matches the published
+field notes for the iMac19,1 exactly: *"scans and connects; HID works with
+ClassicBondedOnly=false; no bonding."* The absence of bonding explains both
+symptoms — headphones dropping, and some devices never reappearing.
+
+```bash
+# /etc/bluetooth/main.conf
+[Policy]
+ClassicBondedOnly=false
+```
+
+plus persistent USB power saving turned off:
+
+```bash
+# /etc/systemd/system.conf.d/99-no-usb-autosuspend.conf
+[Manager]
+USBAutosuspend=0
+```
+
+`usbcore.autosuspend` defaulted to **2 seconds** here, which suspends the
+internal UART bridge repeatedly. That is a textbook cause of exactly these
+disconnects.
+
+### Evidence that this helped
+
+Firmware upload used to fail and now succeeds:
+
+```
+before:  Bluetooth: hci0: BCM: failed to write update baudrate (-16)
+         Bluetooth: hci0: Failed to set baudrate
+after:   Bluetooth: hci0: BCM: 'brcm/BCM.hcd'
+```
+
+### The honest limit
+
+`ClassicBondedOnly=false` lets HID devices connect without completing a bond.
+That improves stability; it does not add bonding. Some devices may still need
+re-pairing after a reboot, and that is the hardware, not the configuration. The
+reliable fix is a USB Bluetooth dongle, which would use the far better `btusb`
+path.
+
+---
+
+## Printing — AirPrint, driverless
+
+Working as a driverless queue with no vendor driver installed:
+
+```
+lpadmin -p HP_M141w -E -v ipp://NPIC6E989.local/ipp/print -m everywhere \
+        -D "HP LaserJet MFP M141w (AirPrint driverless)"
+lpadmin -d HP_M141w
+```
+
+The printer advertises `mopria-certified=2.1`, so it needs no HP driver at all.
+
+### Use the hostname, not the IP
+
+The queue points at `ipp://NPIC6E989.local/ipp/print`, resolved via avahi, not at
+an address. This is not tidiness — there was already a broken queue on this
+printer:
+
+```
+printer HP_LaserJet_MFP_M139-M142 disabled
+  device: hp:/net/HP_LaserJet_MFP_M139-M142?ip=192.168.223.1
+```
+
+Two faults in one: the printer is on `192.168.1.191`, a **different subnet** from
+the stale address, and it used HP's proprietary driver when the printer is
+Mopria-certified. The address had already changed once, which is DHCP doing its
+job. **Reserve a static lease in the router** for `d0:ad:08:c6:e9:89` and this
+whole class of failure stops.
+
+### Verify without wasting paper
+
+The printer reports `media-empty-report` when it is out of paper — and it
+**reports it while actively printing**, and returns to reporting it immediately
+after the job completes:
+
+```
+before:  printer-state=idle       reasons=media-empty-report
+during:  printer-state=processing reasons=spool-area-full-report
+after:   printer-state=idle       reasons=media-empty-report
+```
+
+So treat that reason as unreliable and check the queue instead. Its
+`printer-alert` is no help either: `code=unknown` with an empty description.
+
+```
+lpstat -W completed -o HP_M141w
+```
+
+`cups-browsed` is deliberately **left disabled** — enabling it would auto-create
+a second queue for the same device.
+
+`media-default` is `iso_a4_210x297mm`. That is the printer's own default and it
+is correct for A4-only printing; change it on the printer's own web page, not in
+CUPS.
+
+### Scanning
+
+The printer advertises `Scan=T`, so IPP scanning is available and not configured.
+It needs a working `cups-browsed` or an explicit scan queue.
+
+---
+
+## Sleep — restored to stock, and a config file that was doing nothing
+
+An earlier unattended-access setup masked `sleep.target`, `suspend.target` and
+`hibernate.target`, which removes **Sleep** from the Plasma power menu, and added
+a `keepawake` service. All of that was reverted:
+
+```
+sleep.target      masked -> static
+suspend.target    masked -> static
+hibernate.target  masked -> static
+sleep.conf        7 active lines -> 0
+keepawake.service enabled/active -> disabled/inactive
+```
+
+### The bug that was hiding in plain sight
+
+`HandleLidSwitch`, `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked`
+were written into **`/etc/systemd/sleep.conf`**. They do not belong there.
+`sleep.conf`'s `[Sleep]` section accepts only `IdleAction`, `IdleActionSec` and
+`SuspendTimeoutSec`; the lid-switch settings are `logind.conf` options:
+
+| file | accepts |
+|---|---|
+| `/etc/systemd/sleep.conf` | `IdleAction`, `IdleActionSec`, `SuspendTimeoutSec` |
+| `/etc/systemd/logind.conf` | `HandleLidSwitch*`, `IdleAction*` |
+
+So the lid policy was silently ignored the whole time, and the **only** thing
+actually preventing sleep was the target masking. `/etc/systemd/logind.conf` was
+empty. If lid-close handling ever needs changing, it goes in `logind.conf`.
+
+### Hibernate is enabled but cannot work
+
+`hibernate.target` is unmasked and will be offered in the menu, but there is no
+`resume=` on the kernel command line and no resume device configured, so it will
+fail if selected. Suspend/resume has been restored to stock but **has not been
+tested** on this hardware with the DKMS audio driver loaded.
+
+---
+
 ## Plymouth — REMOVED, measured as harmful on this machine
 
 **Measured, not assumed.** The two initramfs differ in exactly one relevant way:

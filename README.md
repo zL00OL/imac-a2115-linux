@@ -11,7 +11,8 @@ Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2.
 > previously documented as stock and was wrong. The patched module is embedded
 > inside the custom `initrd-stackC` initramfs (`--add-drivers 'amdgpu'`), which
 > is why the copies under `/lib/modules` all look stock and `rpm -V` reports
-> the kernel package intact. See `docs/tiled-5k.md` for how to confirm which
+> the kernel package intact. See `docs/tiled-5k.md
+  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**` for how to confirm which
 > module is actually loaded. Do **not** additionally install a patched
 > `amdgpu.ko` into `/lib/modules` — the initramfs one is already in use.
 > Anything named `amdgpu-stackC-*.ko` is a leftover; the `async` variant is
@@ -27,7 +28,8 @@ sudo scripts/check-5k.sh
 ```
 
 That script is the fastest way to tell *which* of the distinct failure modes you
-have. Read `docs/tiled-5k.md` for what each result means and how to fix it.
+have. Read `docs/tiled-5k.md
+  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**` for what each result means and how to fix it.
 
 ---
 
@@ -55,7 +57,8 @@ grep tiled_stitch /proc/cmdline                   # expect the flag
 ```
 
 If `tiled_stitch` is not a parameter your kernel exposes, the driver has
-dropped or renamed it — see `docs/tiled-5k.md#parameter-missing`.
+dropped or renamed it — see `docs/tiled-5k.md
+  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**#parameter-missing`.
 
 ---
 
@@ -68,7 +71,8 @@ before changing anything.
 
 | Path | |
 |---|---|
-| `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
+| `docs/tiled-5k.md
+  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**` | **the seam**: diagnosis and fixes — read this |
 | `docs/hardware.md` | machine facts, quirks, the Stack C myth |
 | `docs/fixes.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
@@ -114,7 +118,8 @@ initramfs is the single most destructive thing you can do to this machine.
 **Known remaining fault:** the panel sometimes fails to initialise on a cold
 boot, leaving the machine unreachable for hours. Root cause is traced to an
 insufficient AUX-wake retry budget in the DP link-training loops. Unfixed —
-see `docs/tiled-5k.md`.
+see `docs/tiled-5k.md
+  - [Kernel updates](docs/kernel-updates.md) — **read before `zypper up`**`.
 
 Everything else is documented but **unresolved or actively harmful as configured**:
 
