@@ -331,6 +331,21 @@ re-locking if it ever does hold a password.
 > `snd_hda_macbookpro` driver (DKMS) makes the internal speakers work. The
 > driver must be present *as well as* the power management fix — either alone
 > is not enough. See "Cause 1" and "Cause 2" below for why.
+>
+> **⚠ Contested.** `scripts/imac-audio-module` argues the opposite: that DKMS
+> archives the in-tree module and that a hand-placed `updates/ext01` module must
+> win the bind, so DKMS "cannot be used here". The measurements in this section
+> support DKMS; that argument is a theory. This has **not** been settled by
+> reading it off the machine, because that has not been done yet:
+>
+> ```bash
+> dkms status
+> modinfo -n snd_hda_codec_cs8409     # a updates/ path here means DKMS
+> ```
+>
+> Whichever is actually loaded and working is the truth. Until then the DKMS
+> checks in `imac-audio-module` and `imac-reapply` warn rather than fail, because
+> failing would assert a conclusion nobody has verified.
 
 ### What was actually required
 
@@ -485,6 +500,9 @@ curve — mute up to ~12%, then nearly full. Fix with
 ### Applying it
 
 ```bash
+# imac-audio-fix is SUPERSEDED for the 4-channel half: it forces the
+# analog-surround-40 enumeration, which is the faulty one. Its DKMS half may
+# still be right - see the contested note above. Do not run it blind.
 sudo ~/bin/imac-audio-fix --dry-run   # show what would change
 sudo ~/bin/imac-audio-fix             # apply
 sudo ~/bin/imac-audio-fix --check     # verify

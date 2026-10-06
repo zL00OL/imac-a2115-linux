@@ -37,14 +37,15 @@ if grep -q 'amdgpu.tiled_stitch' /proc/cmdline; then
 else
   warn "not present on the kernel command line (default 0 would apply)"
 fi
-echo "  amdgpu module: $(modinfo -F filename amdgpu 2>/dev/null)"
+AMDGPU_FILE=$(modinfo -F filename amdgpu 2>/dev/null)
+echo "  amdgpu module: $AMDGPU_FILE"
 echo "  srcversion:    $(modinfo -F srcversion amdgpu 2>/dev/null)"
 case "$(modinfo -F filename amdgpu 2>/dev/null)" in
   */updates/*) warn "module loaded from updates/ - this is a LOCAL OVERRIDE, not stock";;
   # Not a verdict on the driver. /lib/modules ALWAYS holds a stock copy on this
   # machine, because the patched one lives in the initramfs. Only /sys/module/...
   # srcversion tells you what is actually running - see the note above.
-  *) note "on-disk copy at $1 is the kernel package build (expected: the patched driver lives in the initramfs, not here)";;
+  *) note "on-disk copy at ${AMDGPU_FILE:-unknown} is the kernel package build (expected: the patched driver lives in the initramfs, not here)";;
 esac
 
 #------------------------------------------------------------ 2. connectors
@@ -100,18 +101,45 @@ else
 fi
 
 #---------------------------------------------------- 5. compositor's view
+# kscreen-doctor talks to the compositor over the session bus. Under sudo it
+# cannot see the session and reports 0 outputs, which reads like a fault.
+# `su -c` alone is not enough either: it starts a clean environment with no
+# XDG_RUNTIME_DIR and no WAYLAND_DISPLAY. Ask the session owner, explicitly
+# carrying the display environment across.
+#
+# grep -c EXITS 1 when the count is 0, so the old
+#   `... | grep -c ... || echo "?"`
+# produced the two-line string "0\n?" and the -eq test then errored on it -
+# in exactly the 0-output case the branch exists to handle. Capture stdout
+# first and validate it separately, so 0 stays a number.
+session_outputs() {
+  local u out
+  u=${SUDO_USER:-$(logname 2>/dev/null)}
+  if [ -z "$u" ] || [ "$u" = root ]; then NOUT=unavailable; return 1; fi
+  out=$(su - "$u" -c "XDG_RUNTIME_DIR=/run/user/$(id -u "$u" 2>/dev/null) \
+        WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0} \
+        kscreen-doctor -o 2>/dev/null | grep -c '^Output:'" 2>/dev/null)
+  case "$out" in
+    ''|*[!0-9]*) NOUT=unavailable ;;
+    *)           NOUT=$out ;;
+  esac
+  return 0
+}
+
 hr; echo "5. COMPOSITOR OUTPUT CONFIGURATION"
 if command -v kscreen-doctor >/dev/null; then
-  # kscreen-doctor talks to the session over the user bus. Run under sudo it
-  # cannot see the session and reports 0 outputs, which looks like a fault.
-  # Ask as the session owner instead.
-  SUDO_U=${SUDO_USER:-$(logname 2>/dev/null || echo ilya)}
   kscreen-doctor -o 2>/dev/null | sed 's/^/  /'
-  NOUT=$(su -c 'kscreen-doctor -o 2>/dev/null | grep -c "^Output:"' "$SUDO_U" 2>/dev/null || echo "?")
-  [ "$NOUT" = "0" ] && echo "  (0 outputs can also mean this ran outside the graphical session)"
+  session_outputs
   echo "  outputs reported: $NOUT"
-  if [ "$NOUT" -eq 1 ]; then good "compositor sees ONE output (tiled as intended)"
-  else warn "$NOUT outputs - tiling may not be reaching the compositor"; fi
+  if [ "$NOUT" != 1 ]; then
+    if [ "$NOUT" = unavailable ]; then
+      warn "could not query the compositor session (not run from a graphical session?)"
+    else
+      warn "$NOUT outputs - tiling may not be reaching the compositor"
+    fi
+  else
+    good "compositor sees ONE output (tiled as intended)"
+  fi
 else
   warn "kscreen-doctor unavailable"
 fi
@@ -128,10 +156,10 @@ fi
 #------------------------------------------------------------ 7. verdict
 hr; echo "7. SUMMARY"
 T=$(cat /sys/module/amdgpu/parameters/tiled_stitch 2>/dev/null || echo "?")
-NOUT=$(kscreen-doctor -o 2>/dev/null | grep -c '^Output:')
+session_outputs
 cat <<EOF
   tiling parameter : $T  (cmdline value is -1; the sysfs readback is UNVERIFIED - see docs/tiled-5k.md)
-  compositor views : $NOUT output(s)  (want 1)
+  compositor views : $NOUT  (want 1)
   connectors live  : $NC  (want >= 2)
 
   A SEAM CANNOT BE DIAGNOSTICALLY CONFIRMED BY SCRIPT.

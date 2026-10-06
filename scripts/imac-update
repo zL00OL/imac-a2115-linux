@@ -82,16 +82,26 @@ say "  BLS entries: $(ls -1 /boot/efi/loader/entries/ 2>/dev/null | wc -l)"
 
 if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
   say "  kernel constraint ACTIVE (holding the kernel at the version the patched amdgpu and audio DKMS builds were made for - see docs/kernel-updates.md)"
-  # --kernel lifts the constraint, which means the next kernel may be one the
-  # 6-patch amdgpu stack has never been built against. The patch is verified for
-  # 7.1.x-7.2.x only, and a stock amdgpu has no tiled_stitch parameter at all -
-  # so an unbuilt kernel means no second tile. Say so loudly at this point,
-  # before anything is changed, rather than after.
-  warn "lifting the kernel constraint: the 5K patches are verified for 7.1.x-7.2.x ONLY"
-  warn "you will need a patched amdgpu built into an initramfs for the new kernel - see docs/kernel-updates.md"
-  warn "until that exists, booting the new kernel costs you the 5K panel"
+  if [ "$WANT_KERNEL" -eq 1 ]; then
+    # Only --kernel makes this true. Saying "lifting" during a plain update or a
+    # --dry-run would be false; the case that matters more is the else branch.
+    warn "--kernel: removing the kernel constraint"
+    warn "the 5K patches are verified for 7.1.x-7.2.x ONLY, and a stock amdgpu has"
+    warn "no tiled_stitch parameter at all - an unbuilt kernel means no second tile"
+    warn "you will need a patched amdgpu in an initramfs for the new kernel (docs/kernel-updates.md)"
+  fi
 else
   say "  kernel constraint absent"
+  if [ "$WANT_KERNEL" -eq 1 ]; then
+    # Nothing left to lift, but the incoming kernel still has no patched amdgpu
+    # unless an initramfs carrying one already exists for it. Installing it and
+    # then booting it would drop the 5K panel with no way back from a bad
+    # default, so stop here instead.
+    warn "--kernel with NO constraint: nothing left to lift, and the new kernel"
+    warn "will not have a patched amdgpu - build one into an initramfs first"
+    warn "(docs/kernel-updates.md), or drop --kernel to keep the current kernel"
+    die "aborting --kernel: no patched initrd for the target kernel"
+  fi
 fi
 
 if [ "$DRY" -eq 1 ]; then
@@ -206,9 +216,12 @@ say "  zypper exit: $ZRC"
 # moment to stop.
 case "$ZRC" in
   0)   say "  zypper exit: 0 (clean)" ;;
-  100) say "  zypper exit: 100 - reboot needed, continuing with the rebuild" ;;
-  102) say "  zypper exit: 102 - zypper restart recommended, continuing" ;;
-  103) say "  zypper exit: 103 - reboot + zypper restart recommended, continuing" ;;
+  102) say "  zypper exit: 102 (reboot needed) - continuing with the rebuild"
+       ZRC=0 ;;
+  103) say "  zypper exit: 103 (zypper restart needed) - re-running zypper up once"
+       say "  (103 means some packages were left unapplied; this applies them)"
+       zypper --non-interactive up >/dev/null 2>&1
+       case "$?" in 0|102|103) ZRC=0 ;; *) die "zypper re-run failed" ;; esac ;;
   *)   die "zypper exited $ZRC - inspect the output above before continuing" ;;
 esac
 

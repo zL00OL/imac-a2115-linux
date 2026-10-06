@@ -67,10 +67,11 @@ done
 echo
 echo "=== 5. ICC / wide-gamut colour ==="
 echo "  --- generated P3 profile? ---"
-S bash -c 'ls -la $UHOME/.local/share/icc/ 2>/dev/null' | sed 's/^/  /' || echo "  no icc dir"
-S bash -c 'ls -la $UHOME/.icm/ /usr/share/color/icc/ 2>/dev/null | head -20' | sed 's/^/  /' || echo "  no system ICC dirs"
+ls -la "$UHOME/.local/share/icc/" 2>/dev/null | sed 's/^/  /' || echo "  no icc dir"
+ls -la "$UHOME/.icm/" 2>/dev/null | sed 's/^/  /' || echo "  no ~/.icm"
+S ls -la /usr/share/color/icc/ 2>/dev/null | head -20 | sed 's/^/  /' || echo "  no system ICC dirs"
 echo "  --- kwinoutputconfig colour config ---"
-S bash -c 'grep -iE "icc|profile|p3" $UHOME/.config/kwinoutputconfig.json 2>/dev/null' | sed 's/^/  /' || echo "  (no ICC keys in kwinoutputconfig)"
+grep -iE "icc|profile|p3" "$UHOME/.config/kwinoutputconfig.json" 2>/dev/null | sed 's/^/  /' || echo "  (no ICC keys in kwinoutputconfig)"
 echo "  --- colord present? ---"
 S bash -c 'command -v colord >/dev/null && echo "  colord installed" || echo "  colord NOT installed"'
 S rpm -qa 2>/dev/null | grep -iE "^colord|^kcm-color" | sed 's/^/  /' || echo "  (no colord packages)"

@@ -20,7 +20,9 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 # are handled very differently on purpose:
 #
 #   audio - the patched CS8409 codec must be rebuilt and reinstalled for every
-#           new kernel, into updates/ext01 (not DKMS). Handled by imac-audio-module.
+#           new kernel. Handled by imac-audio-module - but see the OPEN QUESTION
+#           there: DKMS versus updates/ext01 is unresolved, and docs/fixes.md says
+#           DKMS is the verified working configuration.
 #   opencl- GPU compute for Resolve lives in a Flatpak runtime whose hashed
 #           path changes on every runtime update. The ICD file is repointed
 #           here, but the linker and libclc parts are NOT automated: doing
@@ -39,6 +41,8 @@ for a in "$@"; do
     --fix-audio) ONLY="audio" ;;
     --fix-sddm) ONLY="sddm" ;;
     --fix-resolve) ONLY="resolve" ;;
+    --fix-kernel)  ONLY="kernel" ;;
+    --fix-esp)    ONLY="esp" ;;
   esac
 done
 
@@ -221,7 +225,11 @@ fi
 
 # --- codec module: this is what actually decides whether speakers work ---
 if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
-  bad "a DKMS registration for the CS8409 codec exists"
+  # Warn, not fail: docs/fixes.md records DKMS + power_save=0 as the VERIFIED
+  # working configuration, while imac-audio-module argues DKMS breaks the codec
+  # bind. Unresolved - see "OPEN QUESTION" in scripts/imac-audio-module. Calling
+  # this a FAIL would be a false alarm on a correctly configured machine.
+  warn "a DKMS registration for the CS8409 codec exists - expected if docs/fixes.md is right; see the open question in imac-audio-module"
   hint "sudo dkms remove snd_hda_macbookpro/0.2 --all   # DKMS cannot win module ordering"
 fi
 RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
@@ -301,8 +309,6 @@ else
   hint "set it under [Wayland] and [X11]"
 fi
 # session restore reopens every window at login.
-UHOME=${SUDO_USER:+$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)}
-[ -n "$UHOME" ] || UHOME="$HOME"
 KSMRC=$UHOME/.config/ksmserverrc
 if grep -qx 'restoreOnLogin=false' "$KSMRC" 2>/dev/null; then
   ok "session restore disabled (windows will not reopen at login)"
@@ -386,9 +392,8 @@ fi
 say "  theme: $(awk -F= '/^Theme/{print $2; exit}' /etc/plymouth/plymouthd.conf 2>/dev/null)"
 say "  untested: Plymouth has never rendered on the tiled 5K panel"
 
+fi
 say ""
 say "=== done; log $LOG ==="
 [ $CHECK -eq 1 ] && say "(check mode: nothing changed)"
 exit 0
-
-fi
