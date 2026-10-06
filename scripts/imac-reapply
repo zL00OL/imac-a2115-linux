@@ -1,10 +1,20 @@
 #!/bin/bash
+
+# Resolve the invoking user's home rather than assuming one, so these scripts run
+# for any account rather than only the one they were written on.
+UH=${SUDO_USER:-$(logname 2>/dev/null || echo "${USER:-root}")}
+UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
+[ -n "$UHOME" ] || UHOME="$HOME"
+
 #==============================================================================
 # imac-reapply - re-apply all iMac A2115 customisations after a system update
 #
 #   sudo ~/bin/imac-reapply              # do everything
 #   sudo ~/bin/imac-reapply --check      # report only, change nothing
 #   sudo ~/bin/imac-reapply --fix-opencl # only the fragile OpenCL part
+#
+# --fix-X applies section X and skips the rest entirely: kernel, esp, opencl,
+# audio, sddm, resolve, boot. --check ignores these and reports every section.
 #
 # Why: openSUSE Slowroll updates overwrite things, and the two fragile parts
 # are handled very differently on purpose:
@@ -28,6 +38,7 @@ for a in "$@"; do
     --fix-boot) ONLY="boot" ;;
     --fix-audio) ONLY="audio" ;;
     --fix-sddm) ONLY="sddm" ;;
+    --fix-resolve) ONLY="resolve" ;;
   esac
 done
 
@@ -45,6 +56,7 @@ say "=== imac-reapply $(date -Is)  mode=$([ $CHECK -eq 1 ] && echo check || echo
 [ "$(id -u)" -eq 0 ] || { say "must run as root: sudo ~/bin/imac-reapply"; exit 1; }
 
 #--------------------------------------------------------------------- kernel
+if sel kernel; then
 say ""; say "[kernel]"
 CUR=$(uname -r)
 # Kernel versions must be the full module-directory form (7.2.2-1-default).
@@ -83,10 +95,12 @@ else
   warn "running $CUR is not among installed: $(echo "$K" | tr '\n' ' ')"
 fi
 if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
-  ok "constraint file present (holds kernel-default at 7.2.2-1.1)"
+  ok "constraint file present (holds kernel-default at the version the patched amdgpu and audio DKMS builds target)"
 fi
 
 #------------------------------------------------------------------- ESP space
+fi
+if sel esp; then
 say ""; say "[esp]"
 AVAIL=$(df -m --output=avail /boot/efi 2>/dev/null | tail -1 | tr -d ' ')
 say "  free: ${AVAIL}M on /boot/efi"
@@ -102,8 +116,9 @@ else
 fi
 
 #------------------------------------------------------------- OpenCL / rusticl
-say ""; say "[opencl]"
+fi
 if sel opencl; then
+say ""; say "[opencl]"
   ICD=/etc/OpenCL/vendors/rusticl.icd
   LIB=$(find /var/lib/flatpak/runtime -name 'libRusticlOpenCL.so.1' 2>/dev/null | head -1)
   if [ -z "$LIB" ]; then
@@ -186,6 +201,7 @@ if sel opencl; then
 fi
 
 #------------------------------------------------------------------------ audio
+if sel audio; then
 say ""; say "[audio]"
 
 # --- HDA runtime power management: the documented cause of total silence ---
@@ -216,14 +232,14 @@ case "$RESOLVED" in
   *)                 warn "the in-tree module wins, not the patched updates/ext01 build"
                      hint "sudo ~/bin/imac-audio-module" ;;
 esac
-if [ -x /home/ilya/bin/imac-audio-module ]; then
-  /home/ilya/bin/imac-audio-module --check 2>&1 | grep -E '^\s+\[(warn|FAIL|ok)\]' | sed 's/^/  /'
+if [ -x "$UHOME/bin/imac-audio-module" ]; then
+  "$UHOME/bin/imac-audio-module" --check 2>&1 | grep -E '^\s+\[(warn|FAIL|ok)\]' | sed 's/^/  /'
 else
   warn "imac-audio-module not installed; run it after a kernel update"
 fi
 
 # --- PipeWire routing ---
-A=/home/ilya/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
+A=$UHOME/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
 if [ -f "$A" ]; then
   U=$(grep -c 'Mult" = 1\.0' "$A")
   if [ "$U" = "6" ]; then ok "6/6 linear stages at unity gain"
@@ -239,6 +255,8 @@ else
 fi
 
 #------------------------------------------------------------------------- SDDM
+fi
+if sel sddm; then
 say ""; say "[sddm greeter]"
 # The greeter is fixed by a DPI-deriving DisplayCommand wrapper, NOT by
 # QT_SCALE_FACTOR: the greeter runs on Xorg at 96 DPI on a 5K panel.
@@ -284,7 +302,7 @@ else
 fi
 # session restore reopens every window at login.
 UHOME=${SUDO_USER:+$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)}
-[ -n "$UHOME" ] || UHOME=/home/ilya
+[ -n "$UHOME" ] || UHOME="$HOME"
 KSMRC=$UHOME/.config/ksmserverrc
 if grep -qx 'restoreOnLogin=false' "$KSMRC" 2>/dev/null; then
   ok "session restore disabled (windows will not reopen at login)"
@@ -295,6 +313,8 @@ fi
 say "  applies at next login (never restart sddm mid-session)"
 
 #--------------------------------------------------------------------- resolve
+fi
+if sel resolve; then
 say ""; say "[resolve]"
 if [ -d /opt/resolve ]; then
   ok "installed"
@@ -344,6 +364,8 @@ else
 fi
 
 #-------------------------------------------------------------------- plymouth
+fi
+if sel boot; then
 say ""; say "[boot]"
 DEF=$(awk '/^default[[:space:]]/{print $2; exit}' /boot/efi/loader/loader.conf 2>/dev/null)
 TMO=$(awk '/^timeout[[:space:]]/{print $2; exit}' /boot/efi/loader/loader.conf 2>/dev/null)
@@ -368,3 +390,5 @@ say ""
 say "=== done; log $LOG ==="
 [ $CHECK -eq 1 ] && say "(check mode: nothing changed)"
 exit 0
+
+fi

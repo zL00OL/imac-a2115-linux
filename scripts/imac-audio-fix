@@ -1,6 +1,33 @@
 #!/bin/bash
+
+# Resolve the invoking user's home rather than assuming one, so these scripts run
+# for any account rather than only the one they were written on.
+UH=${SUDO_USER:-$(logname 2>/dev/null || echo "${USER:-root}")}
+UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
+[ -n "$UHOME" ] || UHOME="$HOME"
+
 #==============================================================================
 # imac-audio-fix - apply the iMac19,1 (A2115) speaker fixes found by research
+#
+#   ####  SUPERSEDED - DO NOT RUN BLIND  ####
+#
+#   This script encodes an older diagnosis that later measurement contradicted:
+#
+#     * It installs davidjo's driver via DKMS and forces the 4-channel
+#       enumeration (analog-surround-40) with a WirePlumber rule.
+#     * imac-audio-module and imac-reapply state DKMS must never be used and
+#       flag a DKMS registration as a FAIL.
+#     * Measurement later showed the opposite: the 4-channel enumeration is the
+#       FAULTY one. The 2-channel analog-stereo enumeration is the working one,
+#       and on this machine it needs no configuration at all.
+#
+#   It is retained because it documents how the fix was found, and because
+#   --check is still a useful read-only survey. But running it applies settings
+#   that push the codec back toward the broken state.
+#
+#   What to use instead: docs/fixes.md, "Internal speakers". In short - DKMS is
+#   correct and expected, power_save=0 is required, and forcing a 4-channel
+#   profile is not.
 #
 #   sudo imac-audio-fix --check      # report only, change nothing
 #   sudo imac-audio-fix --dry-run    # show what would change, change nothing
@@ -47,8 +74,8 @@ set -uo pipefail
 
 LOG=/var/log/imac-audio-fix.log
 MODPROBE=/etc/modprobe.d/99-imac-audio.conf
-WP=/home/ilya/.config/wireplumber/rules.d/60-imac-audio-4ch.rules
-CHAIN=/home/ilya/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
+WP=$UHOME/.config/wireplumber/rules.d/60-imac-audio-4ch.rules
+CHAIN=$UHOME/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
 DKMS_SRC=/usr/src/snd-hda-macbookpro-0.1
 
 say()  { printf '%s\n' "$*" | tee -a "$LOG"; }

@@ -159,7 +159,11 @@ say ""; say "-- locating a build tree for $TARGET --"
 target_crc() {
   local k=$1
   local d
-  d=$(ls -1 "/lib/modules/$k/build" 2>/dev/null | head -1)
+  # readlink -f, not ls: /lib/modules/$k/build is a symlink to a directory, so
+  # ls lists that directory's CONTENTS and head -1 returns an unrelated filename.
+  # With that bug Module.symvers was never found, so the module_layout CRC check
+  # was silently skipped.
+  d=$(readlink -f "/lib/modules/$k/build" 2>/dev/null)
   if [ -n "$d" ] && [ -f "$d/Module.symvers" ]; then
     grep -w module_layout "$d/Module.symvers" 2>/dev/null | head -1 | awk '{print $1}'
   fi

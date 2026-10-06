@@ -41,7 +41,10 @@ echo "  amdgpu module: $(modinfo -F filename amdgpu 2>/dev/null)"
 echo "  srcversion:    $(modinfo -F srcversion amdgpu 2>/dev/null)"
 case "$(modinfo -F filename amdgpu 2>/dev/null)" in
   */updates/*) warn "module loaded from updates/ - this is a LOCAL OVERRIDE, not stock";;
-  *) good "module is from the kernel package (stock)";;
+  # Not a verdict on the driver. /lib/modules ALWAYS holds a stock copy on this
+  # machine, because the patched one lives in the initramfs. Only /sys/module/...
+  # srcversion tells you what is actually running - see the note above.
+  *) note "on-disk copy at $1 is the kernel package build (expected: the patched driver lives in the initramfs, not here)";;
 esac
 
 #------------------------------------------------------------ 2. connectors
@@ -99,8 +102,13 @@ fi
 #---------------------------------------------------- 5. compositor's view
 hr; echo "5. COMPOSITOR OUTPUT CONFIGURATION"
 if command -v kscreen-doctor >/dev/null; then
+  # kscreen-doctor talks to the session over the user bus. Run under sudo it
+  # cannot see the session and reports 0 outputs, which looks like a fault.
+  # Ask as the session owner instead.
+  SUDO_U=${SUDO_USER:-$(logname 2>/dev/null || echo ilya)}
   kscreen-doctor -o 2>/dev/null | sed 's/^/  /'
-  NOUT=$(kscreen-doctor -o 2>/dev/null | grep -c '^Output:')
+  NOUT=$(su -c 'kscreen-doctor -o 2>/dev/null | grep -c "^Output:"' "$SUDO_U" 2>/dev/null || echo "?")
+  [ "$NOUT" = "0" ] && echo "  (0 outputs can also mean this ran outside the graphical session)"
   echo "  outputs reported: $NOUT"
   if [ "$NOUT" -eq 1 ]; then good "compositor sees ONE output (tiled as intended)"
   else warn "$NOUT outputs - tiling may not be reaching the compositor"; fi
@@ -122,7 +130,7 @@ hr; echo "7. SUMMARY"
 T=$(cat /sys/module/amdgpu/parameters/tiled_stitch 2>/dev/null || echo "?")
 NOUT=$(kscreen-doctor -o 2>/dev/null | grep -c '^Output:')
 cat <<EOF
-  tiling parameter : $T  (want 1)
+  tiling parameter : $T  (cmdline value is -1; the sysfs readback is UNVERIFIED - see docs/tiled-5k.md)
   compositor views : $NOUT output(s)  (want 1)
   connectors live  : $NC  (want >= 2)
 

@@ -114,7 +114,7 @@ before changing anything.
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
 | `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
-| `scripts/imac-audio-fix` | **apply the iMac19,1 speaker fixes** (power_save, driver, 4ch) — start here |
+| `scripts/imac-audio-fix` | **SUPERSEDED** — encodes the old "force 4-channel" diagnosis; kept for the record, `--check` only |
 | `scripts/imac-audio-module` | build/install a CS8409 codec module for a kernel (never DKMS) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
 | `reference/resolve-200` | Resolve launcher: 200% scaling + `RUSTICL_ENABLE` |

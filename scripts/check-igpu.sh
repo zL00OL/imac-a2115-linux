@@ -5,6 +5,13 @@
 #  - is a P3 ICC profile applied or available?
 # Read-only. Nothing is probed or enabled here.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+# Resolve the invoking user's home rather than assuming one. These scripts are
+# documented as runnable by anyone with this repository; a hardcoded home path
+# makes them fail on every other account.
+UH=${SUDO_USER:-$(logname 2>/dev/null || echo "${USER:-root}")}
+UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
+[ -n "$UHOME" ] || UHOME="$HOME"
 # Authenticate once, up front, and let sudo prompt normally.
 #
 # This script used to write a plaintext sudo password to a temp file and pipe it
@@ -60,10 +67,10 @@ done
 echo
 echo "=== 5. ICC / wide-gamut colour ==="
 echo "  --- generated P3 profile? ---"
-S bash -c 'ls -la /home/ilya/.local/share/icc/ 2>/dev/null' | sed 's/^/  /' || echo "  no icc dir"
-S bash -c 'ls -la /home/ilya/.icm/ /usr/share/color/icc/ 2>/dev/null | head -20' | sed 's/^/  /' || echo "  no system ICC dirs"
+S bash -c 'ls -la $UHOME/.local/share/icc/ 2>/dev/null' | sed 's/^/  /' || echo "  no icc dir"
+S bash -c 'ls -la $UHOME/.icm/ /usr/share/color/icc/ 2>/dev/null | head -20' | sed 's/^/  /' || echo "  no system ICC dirs"
 echo "  --- kwinoutputconfig colour config ---"
-S bash -c 'grep -iE "icc|profile|p3" /home/ilya/.config/kwinoutputconfig.json 2>/dev/null' | sed 's/^/  /' || echo "  (no ICC keys in kwinoutputconfig)"
+S bash -c 'grep -iE "icc|profile|p3" $UHOME/.config/kwinoutputconfig.json 2>/dev/null' | sed 's/^/  /' || echo "  (no ICC keys in kwinoutputconfig)"
 echo "  --- colord present? ---"
 S bash -c 'command -v colord >/dev/null && echo "  colord installed" || echo "  colord NOT installed"'
 S rpm -qa 2>/dev/null | grep -iE "^colord|^kcm-color" | sed 's/^/  /' || echo "  (no colord packages)"

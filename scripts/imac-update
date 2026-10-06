@@ -1,4 +1,11 @@
 #!/bin/bash
+
+# Resolve the invoking user's home rather than assuming one, so these scripts run
+# for any account rather than only the one they were written on.
+UH=${SUDO_USER:-$(logname 2>/dev/null || echo "${USER:-root}")}
+UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
+[ -n "$UHOME" ] || UHOME="$HOME"
+
 #==============================================================================
 # imac-update - update openSUSE on this iMac and re-apply every local patch
 #
@@ -28,7 +35,7 @@ done
 LOG=/var/log/imac-update.log
 # This runs under sudo, so ~ is /root and not the user's home. Use an explicit
 # path or the script silently reports the helpers as missing.
-BIN=/home/ilya/bin
+BIN=$UHOME/bin
 say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
 step() { say ""; say "=== $* ==="; }
 ok()   { say "  [ ok ] $*"; }
@@ -74,7 +81,15 @@ say "  running kernel: $(uname -r)"
 say "  BLS entries: $(ls -1 /boot/efi/loader/entries/ 2>/dev/null | wc -l)"
 
 if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
-  say "  kernel constraint ACTIVE (holding kernel at 7.2.2-1.1)"
+  say "  kernel constraint ACTIVE (holding the kernel at the version the patched amdgpu and audio DKMS builds were made for - see docs/kernel-updates.md)"
+  # --kernel lifts the constraint, which means the next kernel may be one the
+  # 6-patch amdgpu stack has never been built against. The patch is verified for
+  # 7.1.x-7.2.x only, and a stock amdgpu has no tiled_stitch parameter at all -
+  # so an unbuilt kernel means no second tile. Say so loudly at this point,
+  # before anything is changed, rather than after.
+  warn "lifting the kernel constraint: the 5K patches are verified for 7.1.x-7.2.x ONLY"
+  warn "you will need a patched amdgpu built into an initramfs for the new kernel - see docs/kernel-updates.md"
+  warn "until that exists, booting the new kernel costs you the 5K panel"
 else
   say "  kernel constraint absent"
 fi
@@ -113,7 +128,7 @@ say "  need ${NEED}M, have ${AVAIL}M"
 
 # Snapshot every entry first. These BLS files are regenerable metadata, but a
 # backup means a mistake here is always reversible.
-SAVEDIR=/home/ilya/5k-stackC-backup/esp-prune-$(date +%Y%m%d-%H%M%S)
+SAVEDIR=$UHOME/5k-stackC-backup/esp-prune-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$SAVEDIR"
 cp -p /boot/efi/loader/entries/*.conf "$SAVEDIR/" 2>/dev/null
 say "  backed up all BLS entries to $SAVEDIR"
@@ -182,7 +197,20 @@ say "  running: zypper up"
 zypper --non-interactive up 2>&1 | tail -25 | sed 's/^/  /'
 ZRC=${PIPESTATUS[0]}
 say "  zypper exit: $ZRC"
-[ "$ZRC" -ne 0 ] && die "zypper reported errors - inspect the output above before continuing"
+# zypper returns advisory codes that mean "succeeded, but":
+#   100 = reboot needed
+#   102 = restart zypper recommended
+#   103 = reboot and restart recommended
+# A kernel update returns one of these routinely. Treating them as fatal aborted
+# the run BEFORE the audio codec was rebuilt for the new kernel - worst possible
+# moment to stop.
+case "$ZRC" in
+  0)   say "  zypper exit: 0 (clean)" ;;
+  100) say "  zypper exit: 100 - reboot needed, continuing with the rebuild" ;;
+  102) say "  zypper exit: 102 - zypper restart recommended, continuing" ;;
+  103) say "  zypper exit: 103 - reboot + zypper restart recommended, continuing" ;;
+  *)   die "zypper exited $ZRC - inspect the output above before continuing" ;;
+esac
 
 # re-check ESP: zypper may have consumed it (new packages with kernel modules)
 AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
