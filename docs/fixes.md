@@ -9,6 +9,22 @@ Tumbleweed). Portability notes in
 
 ---
 
+## Contents
+
+| Section | |
+|---|---|
+| [OpenCL](#opencl) | why GPU compute needed work here |
+| [DaVinci Resolve](#davinci-resolve) | GPU + 200% scaling wrapper |
+| [SDDM greeter at 200%](#sddm-greeter-at-200--the-recipe-that-actually-works) | the working config, and two traps in it |
+| [KDE Wallet prompting at login](#kde-wallet-prompting-at-login--the-actual-fix) | the actual cause |
+| [Audio — FIXED](#audio--fixed-tweeters--woofers-verified-2026-10-03) | what worked |
+| [Audio: earlier diagnosis](#audio-earlier-diagnosis-kept-for-the-record) | superseded, kept for the record |
+| [Internal speakers](#internal-speakers--what-actually-works-and-why-the-eq-cannot-be-applied) | the 2ch/4ch enumeration, and why no EQ is possible |
+| [Bluetooth](#bluetooth--fixed-enough-to-be-usable-but-bonding-does-not-work) | hci_uart, no bonding |
+| [Printing](#printing--airprint-driverless) | driverless AirPrint, and the stale-queue trap |
+| [Sleep](#sleep--restored-to-stock-and-a-config-file-that-was-doing-nothing) | stock restore, and the `logind.conf`/`sleep.conf` bug |
+| [Plymouth](#plymouth--removed-measured-as-harmful-on-this-machine) | removed, with measurements |
+
 ## OpenCL
 
 ### The problem

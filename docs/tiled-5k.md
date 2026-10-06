@@ -9,13 +9,24 @@ and tells you which section below applies.
 
 ---
 
+> [!NOTE]
+> **The `sysfs` readback for `tiled_stitch` is unverified.** The kernel command
+> line is the authoritative value on this machine: `amdgpu.tiled_stitch=-1`.
+> Earlier revisions of this file told readers to expect `1` from the `sysfs`
+> parameter while the command line said `-1`, which is a contradiction nobody
+> resolved. If the parameter is declared `bool` in the driver, `-1` and `1` both
+> normalise to `1` on read and the old comment was accidentally right; if it is
+> an `int`, it reads back verbatim and the old comment was wrong. Check it on a
+> live machine and record what you find rather than trusting either claim.
+
 ## 1. Confirm tiling is on
 
 Tiling is a DRM/KMS feature. It must be active **before** the display server
 starts, so it comes from the kernel command line.
 
 ```bash
-cat /sys/module/amdgpu/parameters/tiled_stitch   # want: 1
+grep tiled_stitch /proc/cmdline                # want: amdgpu.tiled_stitch=-1
+cat /sys/module/amdgpu/parameters/tiled_stitch   # UNVERIFIED: docs disagree, see note below
 grep -o 'amdgpu.tiled_stitch=[^ ]*' /proc/cmdline
 ```
 

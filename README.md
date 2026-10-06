@@ -6,6 +6,12 @@ Everything else in this repo is secondary.
 Hardware: iMac 19,1 / A2115, Radeon RX 580 (`polaris10`), Intel i5-8500.
 Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2.
 
+**Portability: not established.** Everything here is verified on **one machine**
+on one distro. The 5K patches are upstream-verified for the **7.1.x–7.2.x** amdgpu
+series only; on a 7.3+ kernel the patch will not apply and must be re-ported by a
+human. Do not read the section headings below as "this works on any distro" —
+the sibling `docs/distro-matrix.md` used to claim that and it was wrong.
+
 > [!IMPORTANT]
 > **The 5K panel needs a patched `amdgpu`, and it is not stock.** This was
 > previously documented as stock and was wrong. The patched module is embedded
@@ -15,7 +21,20 @@ Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2.
 > module is actually loaded. Do **not** additionally install a patched
 > `amdgpu.ko` into `/lib/modules` — the initramfs one is already in use.
 > Anything named `amdgpu-stackC-*.ko` is a leftover; the `async` variant is
-> known-bad. See `docs/hardware.md#the-stack-c-myth`.
+> known-bad. See `docs/hardware.md#the-amdgpu-that-is-actually-loaded`.
+>
+> **Rebuilding or replacing `initrd-stackC` is the single most destructive
+> thing you can do to this machine.** A stock `amdgpu` has no `tiled_stitch`
+> parameter at all, so losing that initramfs costs you the second tile and the
+> 5120x2880 desktop — and on a cold-boot failure that can mean no display at
+> all. Back it up first, and confirm you can restore it before you start:
+>
+> ```bash
+> # backup (do this before touching anything)
+> sudo cp /boot/efi/opensuse-slowroll/*/initrd-stackC ~/initrd-stackC.backup
+> # confirm you can read it back and that the ESP has room for a copy
+> ls -lh ~/initrd-stackC.backup; df -h /boot/efi
+> ```
 
 ---
 
@@ -55,8 +74,9 @@ The parameter is applied when the kernel command line is parsed, so a change
 requires a reboot. Verify it is actually in effect rather than assuming:
 
 ```bash
-cat /sys/module/amdgpu/parameters/tiled_stitch    # expect 1
-grep tiled_stitch /proc/cmdline                   # expect the flag
+# the kernel command line is the source of truth
+grep tiled_stitch /proc/cmdline                   # expect: amdgpu.tiled_stitch=-1
+cat /sys/module/amdgpu/parameters/tiled_stitch    # UNVERIFIED - see note below
 ```
 
 If `tiled_stitch` is not a parameter your kernel exposes, the driver has
@@ -69,14 +89,24 @@ dropped or renamed it — see `docs/tiled-5k.md#parameter-missing`.
 These look similar but have different causes. Identify which one you have
 before changing anything.
 
+| Symptom | Cause | Start here |
+|---|---|---|
+| **No 5K at all** — one 2560x2880 tile, or a 3840x2160 fallback | The patched `amdgpu` is not in use. Either the initramfs is stock or the boot entry points at the wrong `initrd`. | [`docs/tiled-5k.md`](docs/tiled-5k.md) |
+| **5K but with a visible seam** — a gap or displacement down the midline | Both tiles are up and the framebuffer is stitched, but the two CRTCs are not genlocked. | [`docs/tiled-5k.md#3-diagnosing-an-actual-seam`](docs/tiled-5k.md#3-diagnosing-an-actual-seam) |
+| **Works, then fails on a cold boot** | The panel does not initialise; the machine is unreachable until a forced power cycle. This one is **still open**. | [Known fault below](#status) |
+
 ## Repo layout
 
 | Path | |
 |---|---|
 | `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
 | `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
-| `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order |
-| `LICENSE` | MIT (own work; vendored patches keep upstream terms) |
+| `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order —
+  **not MIT**: they are third-party work from `ahmadtv/omarchy-imac18-3` at commit
+  `43e7ccd`, redistributed under that project's terms (see `THIRD_PARTY_NOTICES.md`).
+  This repository's MIT licence does not apply to them. |
+| `LICENSE` | MIT — covers **this repository's own scripts and documentation only** |
+| `THIRD_PARTY_NOTICES.md` | upstream credits, and the terms the vendored patches keep |
 | `docs/hardware.md` | machine facts, quirks, the Stack C myth |
 | `docs/fixes.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
@@ -113,11 +143,6 @@ visible gap or displacement across the midline. This depends on a **patched
 `amdgpu` carried inside the custom `initrd-stackC`** plus
 `amdgpu.tiled_stitch=-1`. It is not stock, and rebuilding or replacing that
 initramfs is the single most destructive thing you can do to this machine.
-
-**Known remaining fault:** the panel sometimes fails to initialise on a cold
-boot, leaving the machine unreachable for hours. Root cause is traced to an
-insufficient AUX-wake retry budget in the DP link-training loops. Unfixed —
-see `docs/tiled-5k.md`.
 
 Beyond the seam, these are the current facts on this machine.
 
