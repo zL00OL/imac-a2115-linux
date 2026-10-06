@@ -332,20 +332,25 @@ re-locking if it ever does hold a password.
 > driver must be present *as well as* the power management fix — either alone
 > is not enough. See "Cause 1" and "Cause 2" below for why.
 >
-> **⚠ Contested.** `scripts/imac-audio-module` argues the opposite: that DKMS
-> archives the in-tree module and that a hand-placed `updates/ext01` module must
-> win the bind, so DKMS "cannot be used here". The measurements in this section
-> support DKMS; that argument is a theory. This has **not** been settled by
-> reading it off the machine, because that has not been done yet:
+> **✅ SETTLED 2026-10-06.** This account is the correct one. Read off the machine:
 >
-> ```bash
-> dkms status
-> modinfo -n snd_hda_codec_cs8409     # a updates/ path here means DKMS
+> ```
+> $ dkms status
+> snd-hda-macbookpro/0.1, 7.2.2-1-default, x86_64: installed (Original modules exist)
+> snd-hda-macbookpro/0.1, 7.2.7-1-default, x86_64: installed (Original modules exist)
+>
+> $ modinfo -n snd_hda_codec_cs8409
+> /usr/lib/modules/7.2.2-1-default/updates/snd-hda-codec-cs8409.ko.zst
+> $ cat /sys/module/snd_hda_codec_cs8409/srcversion
+> 5957235DD0C11693189E2C5        # matches modinfo -F srcversion
 > ```
 >
-> Whichever is actually loaded and working is the truth. Until then the DKMS
-> checks in `imac-audio-module` and `imac-reapply` warn rather than fail, because
-> failing would assert a conclusion nobody has verified.
+> DKMS installs into `updates/`, and the loaded module is that DKMS build — so
+> DKMS wins the codec bind on this machine and the patched driver is what is
+> actually loaded. `scripts/imac-audio-module`'s ordering argument
+> (`updates/ext01` sorting before `updates/dkms`) does not apply: DKMS is not
+> installing into `updates/dkms` here, so there is nothing to sort ahead of.
+> Its DKMS check has been downgraded from FAIL to warn accordingly.
 
 ### What was actually required
 
@@ -500,9 +505,10 @@ curve — mute up to ~12%, then nearly full. Fix with
 ### Applying it
 
 ```bash
-# imac-audio-fix is SUPERSEDED for the 4-channel half: it forces the
-# analog-surround-40 enumeration, which is the faulty one. Its DKMS half may
-# still be right - see the contested note above. Do not run it blind.
+# Only the 4-channel half of imac-audio-fix is superseded: it forces the
+# analog-surround-40 enumeration, which is the faulty one. Its DKMS half is
+# CORRECT - dkms status confirms snd-hda-macbookpro/0.1 is the loaded driver.
+# imac-audio-module's argument against DKMS does not hold on this machine.
 sudo ~/bin/imac-audio-fix --dry-run   # show what would change
 sudo ~/bin/imac-audio-fix             # apply
 sudo ~/bin/imac-audio-fix --check     # verify

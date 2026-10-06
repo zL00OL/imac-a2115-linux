@@ -104,7 +104,15 @@ done
   Install it from https://github.com/jackdanyell/imac18-3-cs8409-linux-audio"
 
 #
-# OPEN QUESTION - not resolved, do not trust either account
+# SETTLED 2026-10-06: DKMS is correct on this machine. dkms status reports
+# snd-hda-macbookpro/0.1 installed for both kernels, and the loaded module is
+# /usr/lib/modules/7.2.2-1-default/updates/snd-hda-codec-cs8409.ko.zst
+# (srcversion 5957235DD0C11693189E2C5, matching /sys/module). The ordering
+# argument below is therefore wrong in practice: DKMS installs into updates/,
+# not updates/dkms/, so there is no sort-order race to win. See docs/fixes.md.
+#
+# The ext01 mechanism in this script remains valid for a HAND-BUILT module; it
+# is simply not what makes the internal speakers work.
 # ------------------------------------------------------
 # docs/fixes.md and this script DISAGREE about whether the CS8409 codec driver
 # should be installed by DKMS or hand-placed into updates/ext01, and the answer
@@ -119,7 +127,7 @@ done
 #--------------------------------------------------------------- DKMS: open question
 if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
   if [ "$UNINSTALL" -eq 1 ]; then :; else
-    warn "a DKMS registration for this codec exists - it may win the codec bind (UNVERIFIED: see the open question above)."
+    ok "davidjo DKMS driver registered - this IS the working configuration (see SETTLED note above)"
     hint "sudo dkms remove snd_hda_macbookpro/0.2 --all"
     [ "$CHECK" -eq 0 ] && say "  (not removed automatically; run the fix above)"
   fi

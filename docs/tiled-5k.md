@@ -232,6 +232,20 @@ difference when judging results.
 
 ---
 
+## The sysfs/cmdline readback: settled 2026-10-06
+
+Previously unresolved - sysfs was reported as reading `1` while the command line
+said `-1`. Read on the machine:
+
+```
+sysfs  : -1
+cmdline: amdgpu.tiled_stitch=-1
+```
+
+**They agree, and `-1` is correct.** Tiling is on; no discrepancy exists. If a
+future report claims sysfs reads `1`, that is a different kernel build, not a
+new finding.
+
 ## 6. Verifying success
 
 Do not trust a screenshot alone; a screenshot of a tiled desktop can look

@@ -20,9 +20,9 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 # are handled very differently on purpose:
 #
 #   audio - the patched CS8409 codec must be rebuilt and reinstalled for every
-#           new kernel. Handled by imac-audio-module - but see the OPEN QUESTION
-#           there: DKMS versus updates/ext01 is unresolved, and docs/fixes.md says
-#           DKMS is the verified working configuration.
+#           new kernel. Verified on the machine 2026-10-06: DKMS
+#           (snd-hda-macbookpro/0.1) is the working configuration and installs
+#           into updates/. See docs/fixes.md.
 #   opencl- GPU compute for Resolve lives in a Flatpak runtime whose hashed
 #           path changes on every runtime update. The ICD file is repointed
 #           here, but the linker and libclc parts are NOT automated: doing
@@ -225,11 +225,11 @@ fi
 
 # --- codec module: this is what actually decides whether speakers work ---
 if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
-  # Warn, not fail: docs/fixes.md records DKMS + power_save=0 as the VERIFIED
-  # working configuration, while imac-audio-module argues DKMS breaks the codec
-  # bind. Unresolved - see "OPEN QUESTION" in scripts/imac-audio-module. Calling
-  # this a FAIL would be a false alarm on a correctly configured machine.
-  warn "a DKMS registration for the CS8409 codec exists - expected if docs/fixes.md is right; see the open question in imac-audio-module"
+  # Not a fault. Confirmed on the machine 2026-10-06: dkms status reports
+  # snd-hda-macbookpro/0.1 installed, and the loaded snd_hda_codec_cs8409 IS
+  # that DKMS build (srcversion 5957235DD0C11693189E2C5). Expecting its absence
+  # here would flag a correctly configured machine.
+  ok "davidjo DKMS driver registered - this is the working codec configuration"
   hint "sudo dkms remove snd_hda_macbookpro/0.2 --all   # DKMS cannot win module ordering"
 fi
 RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
