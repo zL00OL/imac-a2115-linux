@@ -31,7 +31,9 @@ the sibling `docs/distro-matrix.md` used to claim that and it was wrong.
 >
 > ```bash
 > # backup (do this before touching anything)
-> sudo cp /boot/efi/opensuse-slowroll/*/initrd-stackC ~/initrd-stackC.backup
+> # named explicitly from the running kernel: a /*/ glob would pass several
+> # sources to a file destination and fail if you ever have two kernels on the ESP
+> sudo cp -p "/boot/efi/opensuse-slowroll/$(uname -r)/initrd-stackC" ~/initrd-stackC.backup
 > # confirm you can read it back and that the ESP has room for a copy
 > ls -lh ~/initrd-stackC.backup; df -h /boot/efi
 > ```
@@ -101,13 +103,10 @@ before changing anything.
 |---|---|
 | `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
 | `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
-| `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order —
-  **not MIT**: they are third-party work from `ahmadtv/omarchy-imac18-3` at commit
-  `43e7ccd`, redistributed under that project's terms (see `THIRD_PARTY_NOTICES.md`).
-  This repository's MIT licence does not apply to them. |
+| `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order (**not MIT** — see `THIRD_PARTY_NOTICES.md`) |
 | `LICENSE` | MIT — covers **this repository's own scripts and documentation only** |
 | `THIRD_PARTY_NOTICES.md` | upstream credits, and the terms the vendored patches keep |
-| `docs/hardware.md` | machine facts, quirks, the Stack C myth |
+| `docs/hardware.md` | machine facts, and which `amdgpu` actually loads |
 | `docs/fixes.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
 | `docs/troubleshooting.md` | failure modes that cost time |
@@ -119,7 +118,6 @@ before changing anything.
 | `scripts/imac-audio-module` | build/install a CS8409 codec module for a kernel (never DKMS) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
 | `reference/resolve-200` | Resolve launcher: 200% scaling + `RUSTICL_ENABLE` |
-| `THIRD_PARTY_NOTICES.md` | credits for every upstream project relied on |
 
 ## Credits
 

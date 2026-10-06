@@ -16,8 +16,21 @@ and tells you which section below applies.
 > parameter while the command line said `-1`, which is a contradiction nobody
 > resolved. If the parameter is declared `bool` in the driver, `-1` and `1` both
 > normalise to `1` on read and the old comment was accidentally right; if it is
-> an `int`, it reads back verbatim and the old comment was wrong. Check it on a
-> live machine and record what you find rather than trusting either claim.
+> an `int`, it reads back verbatim and the old comment was wrong.
+>
+> **How to record the answer.** Open an issue on this repository titled
+> `tiled_stitch sysfs readback: <1 or -1>` and paste the output of all four:
+>
+> ```bash
+> uname -r
+> grep tiled_stitch /proc/cmdline
+> cat /sys/module/amdgpu/parameters/tiled_stitch
+> modinfo -k "$(uname -r)" amdgpu | grep tiled_stitch
+> ```
+>
+> Include `uname -r`, because the answer may differ by kernel series. When
+> someone reports a result it gets folded into this note. Until then the command
+> line remains the value to trust.
 
 ## 1. Confirm tiling is on
 
@@ -26,8 +39,7 @@ starts, so it comes from the kernel command line.
 
 ```bash
 grep tiled_stitch /proc/cmdline                # want: amdgpu.tiled_stitch=-1
-cat /sys/module/amdgpu/parameters/tiled_stitch   # UNVERIFIED: docs disagree, see note below
-grep -o 'amdgpu.tiled_stitch=[^ ]*' /proc/cmdline
+cat /sys/module/amdgpu/parameters/tiled_stitch   # UNVERIFIED - see the note above
 ```
 
 | Value | Meaning |
