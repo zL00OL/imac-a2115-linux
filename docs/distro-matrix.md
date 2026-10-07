@@ -8,6 +8,32 @@
 What applies where. The reference system is openSUSE **Slowroll**, but
 most of this is portable.
 
+## Tested / supported matrix
+
+The honest summary. A blank cell means nobody has checked, not that it works.
+
+| Machine | Kernel | Distro | Display 5K | Backlight | P3 | Audio | Status |
+|---|---|---|---|---|---|---|---|
+| A2115 / Ellesmere | 7.2.2-1-default | Slowroll | yes | yes | **UNTESTED** | yes | **VERIFIED** |
+| A2115 / Ellesmere | 7.2.7-1-default | Slowroll | **UNTESTED** | — | — | yes (DKMS built) | **TESTING** |
+| A2115 / Ellesmere | 7.2.x newer | Slowroll | ? | ? | ? | ? | **UNTESTED** |
+| A2115 / Ellesmere | 7.3+ | any | no | — | — | — | patch will not apply |
+| A2115 / 580X | any | any | ? | ? | ? | ? | **UNTESTED** |
+| iMac18,3 | any | any | ? | ? | ? | ? | **UNTESTED** |
+| Any | any | Fedora / Debian / Arch / NixOS | ? | ? | ? | ? | **UNTESTED** |
+
+Notes on the rows:
+
+- **7.2.7 audio is verified, display is not.** `dkms status` lists
+  `snd-hda-macbookpro/0.1` built for 7.2.7, so the codec half is done. The
+  patched `amdgpu` has only ever been built for 7.2.2 — the 7.2.7 object tree
+  contains no modules. So the question "is this tied to 7.2.2, or was 7.2.2 just
+  the first one tried?" is **still open**.
+- **7.3+ is a hard stop, not a risk.** The six patches target the 7.1.x–7.2.x
+  amdgpu series. They will not apply without re-porting.
+- **Every other distro row is UNTESTED.** This file gives the commands to set
+  `tiled_stitch` on each, which is not the same as having run them.
+
 ## Why Slowroll and not Tumbleweed
 
 Worth recording, since it affects how much of this documentation is necessary.
