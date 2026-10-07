@@ -1,0 +1,374 @@
+# Audio: the CS8409 codec and the internal speakers
+
+> **Status: MIXED — read the per-section labels.**
+> The DKMS verdict is **VERIFIED** by measurement on the reference machine: the
+> loaded `snd_hda_codec_cs8409` *is* the `snd-hda-macbookpro/0.1` DKMS build.
+> The `updates/ext01` approach is **SUPERSEDED** and lost the codec bind here.
+> The 4-channel `analog-surround-40` enumeration is **BROKEN**; the 2-channel
+> `analog-stereo` enumeration is the working one. Do not read one section's
+> verdict as applying to the file.
+
+This repository covers two things: the seamless tiled 5K display, and the
+internal audio. This page is the audio half — how the Apple CS8409 codec is
+installed, why DKMS, what was tried first and why it was wrong, and why the
+speakers work on a 2-channel enumeration rather than the 4-channel one that
+looks more complete.
+
+Everything here was measured on openSUSE **Slowroll** (see
+`docs/distro-matrix.md`). Portability notes are in that file.
+
+---
+
+## Contents
+
+| Section | |
+|---|---|
+| [Audio — FIXED](#audio--fixed-tweeters--woofers-verified-2026-10-03) | the working configuration |
+| [Audio: earlier diagnosis](#audio-earlier-diagnosis-kept-for-the-record) | superseded, kept for the record |
+| [Internal speakers](#internal-speakers--what-actually-works-and-why-the-eq-cannot-be-applied) | the 4-channel fault, and why the EQ stays parked |
+
+## Audio — FIXED (tweeters + woofers), verified 2026-10-03
+
+> **Outcome:** `power_save=0 power_save_controller=N` plus davidjo's
+> `snd_hda_macbookpro` driver (DKMS) makes the internal speakers work. The
+> driver must be present *as well as* the power management fix — either alone
+> is not enough. See "Cause 1" and "Cause 2" below for why.
+>
+> **✅ SETTLED 2026-10-06.** This account is the correct one. Read off the machine:
+>
+> ```
+> $ dkms status
+> snd-hda-macbookpro/0.1, 7.2.2-1-default, x86_64: installed (Original modules exist)
+> snd-hda-macbookpro/0.1, 7.2.7-1-default, x86_64: installed (Original modules exist)
+>
+> $ modinfo -n snd_hda_codec_cs8409
+> /usr/lib/modules/7.2.2-1-default/updates/snd-hda-codec-cs8409.ko.zst
+> $ cat /sys/module/snd_hda_codec_cs8409/srcversion
+> 5957235DD0C11693189E2C5        # matches modinfo -F srcversion
+> ```
+>
+> DKMS installs into `updates/`, and the loaded module is that DKMS build — so
+> DKMS wins the codec bind on this machine and the patched driver is what is
+> actually loaded. `scripts/imac-audio-module`'s ordering argument
+> (`updates/ext01` sorting before `updates/dkms`) does not apply: DKMS is not
+> installing into `updates/dkms` here, so there is nothing to sort ahead of.
+> Its DKMS check has been downgraded from FAIL to warn accordingly.
+
+### What was actually required
+
+```bash
+# /etc/modprobe.d/99-imac-audio.conf
+options snd_hda_intel power_save=0 power_save_controller=N
+```
+
+```bash
+# davidjo/snd_hda_macbookpro via DKMS, built against this kernel
+sudo dkms install --force snd-hda-macbookpro/0.1
+```
+
+Verified markers after reboot:
+
+```
+Primary patch_cs8409 NOT FOUND trying APPLE
+Codec: Cirrus Logic CS8409/CS42L83
+modinfo -n snd_hda_codec_cs8409 -> .../updates/snd-hda-codec-cs8409.ko.zst
+```
+
+`CS8409/CS42L83` is the signature that the patched driver is live; the in-tree
+driver only ever reports `CS8409`.
+
+### Two traps that cost hours
+
+**The DKMS build path.** Upstream `dkms.conf` already carries
+`BUILT_MODULE_LOCATION[0]="build/hda/codecs/cirrus"`, which is required on
+kernels where the HDA codecs moved. If a build "fails" but the log shows
+`exit code: 0`, DKMS could not find the `.ko` and installed nothing.
+
+**This host cannot reach `cdn.kernel.org`.** davidjo's installer downloads the
+kernel tarball, and it hung here for many minutes. It now copies the `sound/hda`
+subtree from a preserved source directory instead
+(`/usr/src/snd-hda-macbookpro-0.1/hda-src`, 109 MB). `GitHub` is also
+unreachable from this machine, so clone the driver elsewhere and copy it in.
+
+### Cause 2 — TDM slots: diagnosed, NOT fixed
+
+With the driver and `power_save` fixed, playback is audible but the channels are
+wrong: **tweeters only**, and on one test a loud hiss. That is 2 of 4 channels,
+matching [issue #211](https://github.com/davidjo/snd_hda_macbookpro/issues/211)
+exactly — slots 0 and 3 clean, the middle slots corrupted.
+
+The prescribed fix is to offer `SNDRV_PCM_FMTBIT_S24_3LE`. The playback path in
+`cirrus_apple.h` omits it while the capture paths include it:
+
+```c
+hinfo->formats = SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S24_LE;   /* needs S24_3LE */
+```
+
+**Adding the flag is not sufficient.** PipeWire always negotiates `s32le` and
+ignored the new format, and restricting the mask to `S24_3LE` only made things
+worse — PipeWire then failed to open the device at all (`Input/output error`).
+Forcing the format from userspace is the unsolved part.
+
+### Also required: a working PipeWire state
+
+A stale WirePlumber state (muted sink, bad volume, sticky 4-channel profile)
+produced **total silence** at one point, which looked like a driver failure but
+was not. Resetting it restored audio immediately:
+
+```bash
+systemctl --user stop wireplumber pipewire pipewire-pulse
+mv ~/.local/state/wireplumber ~/.local/state/wp.bak
+systemctl --user start pipewire pipewire-pulse wireplumber
+```
+
+### Warning: there is no stock codec fallback
+
+`rpm -V kernel-default` reports:
+
+```
+missing  /usr/lib/modules/7.2.2-1-default/kernel/sound/hda/codecs/cirrus/snd-hda-codec-cs8409.ko.zst
+```
+
+DKMS archived and removed the in-tree module when it installed. If the DKMS
+registration is ever removed, **no codec loads at all**. Restore with
+`sudo dkms install --force snd-hda-macbookpro/0.1`.
+
+### The old ext01 approach — superseded
+
+`scripts/imac-audio-module` builds into `updates/ext01` and is retained only
+because it is the correct mechanism for a *hand-built* module. It is not how the
+audio is fixed now: DKMS with `power_save=0` is. Its vermagic check is also
+insufficient on its own — a mismatched tree produces `disagrees about version of
+symbol module_layout` while vermagic still matches, so it now compares the
+`module_layout` CRC as well.
+
+---
+
+## Audio: earlier diagnosis (kept for the record)
+
+**The previous diagnosis in this file was wrong twice over.** It first blamed
+gain staging and a missing limiter, then blamed kernel module ordering. Both
+were red herrings. Both were reached before anyone searched the driver tracker
+for this exact machine model, which is the mistake that cost a whole evening.
+
+**Current symptom:** rear pair works, front pair is silent. No mixer setting
+changes it.
+
+### Cause 1 — HDA runtime power management (total silence)
+
+`davidjo/snd_hda_macbookpro` issue #209, filed on an **iMac19,1** — this
+machine. The reporter had everything apparently correct and no sound:
+
+> `Primary patch_cs8409 NOT FOUND trying APPLE` · codec `CS8409/CS42L83` ·
+> `CS8409/CS42L83 Analog` present · jack detection correct · PCM `state:
+> RUNNING` · pin `0x24` at `Pin-ctls: 0x40: OUT` — **silent at every volume.**
+
+With a debug build the amplifier I2C status read `0x20` instead of `0x18`, and
+neither the CS42L83 nor the four **TAS5764L** amplifiers answered.
+
+The cause is HDA runtime power management. Distros ship
+`snd_hda_intel power_save=1`, so the controller runtime-suspends after a second
+of idle. **The CS8409's I2C bridge is powered from that controller**, so while
+it is suspended the amplifiers cannot be programmed at all. There is no error
+anywhere: digital path running, pin enabled, PCM running, no sound. Issue #217
+adds that with the default setting the codec state goes bad after ~10 s idle.
+
+```bash
+# /etc/modprobe.d/99-imac-audio.conf
+options snd_hda_intel power_save=0 power_save_controller=N
+```
+
+The reporter states that after this, internal speakers work **with davidjo's
+driver unmodified from master**. This may also explain why the same model works
+for people on Fedora and Arch but not on Ubuntu.
+
+### Cause 2 — TDM slot corruption (partial silence)
+
+`davidjo#211` bisected this on a different model and it matches our symptom
+exactly:
+
+> only **2 of the 4 speaker drivers** ever play. The failure is in the CS8409's
+> TDM output: **slots 1 and 2** (the middle of the frame) are never delivered
+> correctly. **Slots 0 and 3 are always clean.**
+
+Two of four channels working is precisely a "rear pair works, front pair silent"
+result. Apple's native format for this codec is **`0x4033` — S24_3LE, 4ch,
+44.1 kHz**; adding `SNDRV_PCM_FMTBIT_S24_3LE` to the driver's format mask woke
+the dead amplifiers. The 2-channel path in the driver misaligns data; a native
+4-channel stream is clean (#217).
+
+### Cause 3 — there is no hardware volume
+
+`davidjo#217`: no codec node has an amp, so `PCM Playback Volume` is an ALSA
+`softvol` that PipeWire mistakes for a hardware mixer. The result is a stepped
+curve — mute up to ~12%, then nearly full. Fix with
+`api.alsa.soft-mixer = true`.
+
+### Applying it
+
+```bash
+# Only the 4-channel half of imac-audio-fix is superseded: it forces the
+# analog-surround-40 enumeration, which is the faulty one. Its DKMS half is
+# CORRECT - dkms status confirms snd-hda-macbookpro/0.1 is the loaded driver.
+# imac-audio-module's argument against DKMS does not hold on this machine.
+sudo ~/bin/imac-audio-fix --dry-run   # show what would change
+sudo ~/bin/imac-audio-fix             # apply
+sudo ~/bin/imac-audio-fix --check     # verify
+sudo ~/bin/imac-audio-fix --undo      # roll back
+```
+
+It writes the `power_save` option, installs davidjo's driver (with the
+`BUILT_MODULE_LOCATION` fix below), forces the 4-channel profile with
+`soft-mixer = true`, and sets the Apple crossover chain aside. **It never
+reboots.**
+
+### The DKMS build trap (why davidjo appeared not to work here)
+
+On kernels where the HDA codecs moved to `sound/hda/codecs/cirrus/`, the module
+compiles but DKMS cannot find it:
+
+```
+  LD [M]  codecs/cirrus/snd-hda-codec-cs8409.ko
+  # exit code: 0
+Error! Build of build/hda/snd-hda-codec-cs8409.ko failed for: <kernel>
+```
+
+`dkms.conf` still points `BUILT_MODULE_LOCATION` at the old path, so DKMS
+declares failure and installs nothing. One line:
+
+```diff
+-BUILT_MODULE_LOCATION[0]="build/hda"
++BUILT_MODULE_LOCATION[0]="build/hda/codecs/cirrus"
+```
+
+**This means the driver may never have been under test here at all.** It also
+reinterprets `jackdanyell` issue #3 — its "no PCM devices are registered at
+all" is exactly what a spurious DKMS failure produces, so the
+`updates/ext01` ordering theory built from it was probably solving a
+non-problem.
+
+### What was tried and abandoned, and why
+
+| Attempt | Outcome |
+|---|---|
+| Unity-gain PipeWire chain, ALSA levels to 100% | No effect on the fault |
+| jackdanyell v0.2 (`imac18-3-cs8409-linux-audio`) | Wrong model; targets iMac18,3 |
+| DKMS install of that fork | No PCM devices registered |
+| Hand-built module in `updates/ext01` | `disagrees about version of symbol module_layout` — `vermagic` matched, so the guard missed it. The tree had a different `.config` (`module_layout` CRC `0x60b44b0b` vs the real `0xbb7f52aa`) |
+| `updates/ext01` ordering theory | Built on issue #2 vs #3; likely a red herring (see above) |
+
+`scripts/imac-audio-module` is retained because building against
+`/lib/modules/$(uname -r)/build` is still the correct mechanism, but it is not
+the fix. **Try `imac-audio-fix` first.**
+
+### If it is still silent after a reboot
+
+Report these three facts:
+
+1. Does `imac-audio-fix --check` say `power_save=N`?
+2. Does `/proc/asound/card0/codec#0` show the CS42L83 sub-codec?
+3. With a 4-channel stream, do channels 0 and 3 play while 1 and 2 stay silent?
+
+Those distinguish cause 1 from cause 2.
+
+## Internal speakers — what actually works, and why the EQ cannot be applied
+
+> **Outcome:** internal speakers work. The woofer fault was a sink-enumeration
+> problem, not a broken driver. A speaker EQ is **not achievable** on this machine
+> because PipeWire's filter-chain module fails to initialise. Read this before
+> touching the tuning files.
+
+### The woofer fault was the 4-channel enumeration
+
+The internal codec has been observed in **two different enumerations** in a
+single session:
+
+```
+alsa_output.pci-0000_00_1f.3.analog-stereo       2ch 44100Hz   WORKS
+alsa_output.pci-0000_00_1f.3.analog-surround-40  4ch            woofer hisses / silent
+```
+
+On the 4-channel form, channels 3-4 drive the woofer and that path
+misbehaves. On the 2-channel form everything plays cleanly, and **no
+configuration change was required to get there** — the codec simply settled on
+the working enumeration after a stream was moved and the sink re-enumerated.
+
+This matches davidjo's NOTES.md for this driver: the tweeters are channels 1-2
+(node `0x02 -> 0x24`) and the woofer is channels 3-4 (node `0x03 -> 0x25`), two
+different paths. Only the 3-4 path misbehaves.
+
+Be aware the sink name can change underneath you. **Anything that hardcodes
+`analog-surround-40` will silently stop matching** when it flips to
+`analog-stereo`, and vice versa.
+
+### The EQ cannot run: filter-chain fails to initialise
+
+```
+[E] mod.filter-chain | can't connect: Operation not supported
+```
+
+`libpipewire-module-filter-chain` will not instantiate its nodes on this
+machine. Because it is loaded with `flags = [ nofail ]`, PipeWire **ignores the
+failure and continues** — so no node appears, audio bypasses the EQ, and
+`pactl`/`wpctl` show a perfectly healthy graph.
+
+Two consequences worth internalising:
+
+- **This is why the 4-way tuning was parked.** The upstream author's notes
+  describe the identical symptom ("started, reported itself applied, created no
+  nodes, audio silently bypassed the EQ"). It was never a config mistake.
+- **A missing EQ looks exactly like a working EQ.** Never trust "the tuning is
+  applied" without confirming the node exists in `wpctl status`.
+
+Caveat on the diagnosis: the module failure was reproduced in an isolated
+PipeWire with no session manager, and separately observed to produce no node in
+the running instance. Those two were not proven to share a root cause.
+
+### The tuning that is parked, and why it is the right one to keep parked
+
+`~/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf.disabled-by-imac-audio-fix`
+
+That file is **not** a hand-fitted curve. It was generated by
+`tools/generate-filter-chain.py` from `data/layout16-dsp.json`, and every
+coefficient comes from macOS `AppleHDA.kext` layout 16 — the layout Apple's
+firmware selects for this machine. Generator and data are in
+`/home/ilya/imac-a2115-linux/`. It builds a 4-way crossover: stereo in, a
+12-section input EQ per channel, pre-split gain, then a split to tweeters
+(FL/FR, highpass ~2999 Hz) and woofers (RL/RR, lowpass ~1380 Hz) each with its
+own curve.
+
+It is parked for two independent reasons: it targets the 4-channel sink name,
+and filter-chain cannot load here. It should stay parked. If filter-chain is
+ever fixed, this file is the one to re-enable — not a substitute curve.
+
+A 2-channel variant was built by extracting the pre-split portion of this chain
+(input EQ + pre-split gain, coefficients verified byte-identical) and is parked
+as `50-imac-2ch.conf.disabled-filterchain-broken`. The per-driver curves cannot
+be reproduced on a stereo output: summing a highpassed and a lowpassed copy of
+the same signal reconstructs the input rather than correcting it.
+
+### Ruled out
+
+Do not spend time on these again:
+
+- `options snd_hda_intel model=imac` — comes from an *egorenar*-based install
+  script. With the davidjo driver the Apple path is already forced, so the model
+  string is very likely ignored.
+- Forcing `S24_3LE` — PipeWire needs both ends of the graph to agree;
+  constraining only the sink produces I/O errors. The rate was already correct
+  at 44100 Hz.
+- The ALSA `equalizer` PCM route — PipeWire opens the ALSA device directly and
+  bypasses `~/.asoundrc`, so this needs the device re-plumbed first.
+- An LV2 lookahead limiter — this system has **zero** LV2 plugins installed and
+  `lsp-plugins-lv2` is not in the openSUSE repos.
+
+### The honest bottom line
+
+The CS8409 does no DSP at all on Linux; macOS's voicing is entirely software EQ.
+Without filter-chain there is no way to reproduce it, so these speakers will
+sound thinner and brighter than the same machine under macOS. That is a driver
+limitation, not a misconfiguration.
+
+
+
+

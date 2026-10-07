@@ -148,18 +148,15 @@ before changing anything.
 | `LICENSE` | MIT — covers **this repository's own scripts and documentation only** |
 | `THIRD_PARTY_NOTICES.md` | upstream credits, and the terms the vendored patches keep |
 | `docs/hardware.md` | machine facts, and which `amdgpu` actually loads |
-| `docs/fixes.md` | everything else that was fixed (secondary) |
+| `docs/audio.md` | everything else that was fixed (secondary) |
 | `docs/distro-matrix.md` | what applies on which distro |
 | `docs/troubleshooting.md` | failure modes that cost time |
-| `docs/igpu-and-colour.md` | hidden Intel iGPU and P3 wide-gamut — **not yet audited** |
 | `scripts/imac-verify` | **one command that says whether this machine works** — read-only; paste its output when reporting an issue |
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
-| `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
 | `scripts/imac-audio-fix` | **SUPERSEDED** — encodes the old "force 4-channel" diagnosis; kept for the record, `--check` only |
-| `scripts/imac-audio-module` | **SUPERSEDED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/fixes.md](docs/fixes.md) |
+| `scripts/imac-audio-module` | **SUPERSEDED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/audio.md](docs/audio.md) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
-| `reference/resolve-200` | Resolve launcher: 200% scaling + `RUSTICL_ENABLE` |
 
 ## Credits
 
@@ -184,28 +181,18 @@ visible gap or displacement across the midline. This depends on a **patched
 `amdgpu.tiled_stitch=-1`. It is not stock, and rebuilding or replacing that
 initramfs is the single most destructive thing you can do to this machine.
 
-Beyond the seam, these are the current facts on this machine.
+**Audio: working, and verified rather than assumed.** The internal speakers play
+on the 2-channel `analog-stereo` enumeration, with no configuration change
+required. The old "rear pair works, front pair silent" symptom was not a broken
+amplifier path — it was the codec enumerating as a 4-channel sink
+(`analog-surround-40`), where only the woofer path misbehaves. The codec itself
+is a DKMS module (`snd-hda-macbookpro/0.1`), verified by srcversion against the
+loaded module. See `docs/audio.md`.
 
-**Working, and verified rather than assumed:**
-
-- **Internal speakers.** Both pairs play. The old "rear pair works, front pair
-  silent" symptom was not a broken amplifier path — it was the codec
-  enumerating as a 4-channel sink (`analog-surround-40`), where only the woofer
-  path misbehaves. On the 2-channel `analog-stereo` enumeration everything plays
-  cleanly, with no configuration change required. See
-  `docs/fixes.md`.
-- **GPU OpenCL.** Working, verified in DaVinci Resolve: `RUSTICL_ENABLE=radeonsi`,
-  an `LD_LIBRARY_PATH` pointing only at `/opt/resolve/rusticl-libs`, and libclc
-  staged under `/usr/lib/x86_64-linux-gnu/GL/default/share/clc/`. Use
-  `reference/resolve-200`.
-- **Printing.** Driverless AirPrint, no vendor driver — the printer is
-  Mopria-certified. Queue `HP_M141w`.
-- **Bluetooth, with a documented limit.** Usable via `hci_uart`+`btbcm` with
-  `ClassicBondedOnly=false` and USB autosuspend disabled. This chip does **not**
-  bond, which is the underlying cause of the dropouts; a USB dongle is the
-  reliable fix.
-- **SDDM greeter and KWallet.** Both fixed; see the greeter page for the working
-  configuration and the two traps in it.
+This repository covers the **display** and the **audio codec**, and nothing
+else. Printers, Bluetooth, the greeter, GPU compute, sleep and Plymouth were
+worked on at some point and have been removed as out of scope; they remain in
+the git history if you want them back.
 
 **Known remaining faults:**
 
@@ -217,10 +204,6 @@ Beyond the seam, these are the current facts on this machine.
   here.
 - **No microphone.** The CS8409 exposes no capture device at all. The driver's
   own notes describe input as unfinished. Driver work, not configuration.
-- **No fan control.** No fan-speed daemon, so the exhaust fan is not thermally
-  curved the way macOS curves it.
-- **Hibernate is offered but cannot work** — no `resume=` on the kernel command
-  line.
 - **A speaker EQ is not achievable.** PipeWire's `filter-chain` module fails to
   initialise on this machine, and with `nofail` it fails silently — audio
   bypasses the EQ while every tool reports success. This is also why the
@@ -232,5 +215,5 @@ Beyond the seam, these are the current facts on this machine.
   through `initrd-stackC-ply` stalled before the network came up. Measured as
   harmful; the backup is retained.
 
-`docs/fixes.md` records what is broken as carefully as what works, including the
+`docs/audio.md` records what is broken as carefully as what works, including the
 approaches that were tried and did not work.

@@ -18,7 +18,7 @@ their authors.
 | [BR1UHNz/retina-5k-imac-linux](https://github.com/BR1UHNz/retina-5k-imac-linux) | Primary reference for getting the Retina 5K iMac display working on Linux. |
 | [armin-haghi/imac-5k-display](https://github.com/armin-haghi/imac-5k-display) | iMac 5K display configuration and troubleshooting. |
 | [MarkPronkin/imac5k-universal-linux-patcher](https://github.com/MarkPronkin/imac5k-universal-linux-patcher) | The universal 5K patcher approach — where the "patched driver" methodology came from. Multi-distro fork of the driver below. |
-| [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) | **The most directly useful reference.** Documented the CS8409 audio driver, the **iGPU / P3 wide-gamut** work, and the **speaker-EQ limiter** failure analysis matching the audio symptom in `docs/fixes.md`. |
+| [ahmadtv/omarchy-imac18-3](https://github.com/ahmadtv/omarchy-imac18-3) | **The most directly useful reference.** Documented the CS8409 audio driver, the **iGPU / P3 wide-gamut** work, and the **speaker-EQ limiter** failure analysis matching the audio symptom in `docs/audio.md`. |
 | [jackdanyell/imac18-3-cs8409-linux-audio](https://github.com/jackdanyell/imac18-3-cs8409-linux-audio) | Upstream CS8409 audio driver used by the patcher above. |
 
 **Omarchy** is a Linux distribution (Arch + Hyprland), not a 5K project. It is
@@ -98,10 +98,8 @@ The following projects do the actual work.
 
 | Project | Role |
 |---|---|
-| [SDDM](https://github.com/sddm/sddm) | Login/greeter. The greeter DPI wrapper in `docs/fixes.md` is wired through it. |
 | [KDE Frameworks](https://invent.kde.org/frameworks) — KWallet | Wallet storage; source of the "Default keyring" prompt. |
 | [KDE Plasma](https://invent.kde.org/plasma) | The Wayland session, `kscreen-doctor`, output configuration. |
-| [Qt 5](https://www.qt.io/) | Resolve bundles Qt 5.15.2 unmodified; the high-DPI behaviour documented in `docs/fixes.md` comes from here. |
 
 ### Compute
 

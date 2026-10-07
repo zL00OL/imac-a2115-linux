@@ -257,7 +257,7 @@ startplasma-wayland        # or: startx
 
 If the desktop starts, the machine is healthy and the problem is the greeter.
 The working configuration and two traps in it are in the SDDM notes under
-`docs/fixes.md`.
+`docs/audio.md`.
 
 ---
 

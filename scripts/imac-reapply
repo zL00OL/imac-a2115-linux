@@ -22,7 +22,7 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 #   audio - the patched CS8409 codec must be rebuilt and reinstalled for every
 #           new kernel. Verified on the machine 2026-10-06: DKMS
 #           (snd-hda-macbookpro/0.1) is the working configuration and installs
-#           into updates/. See docs/fixes.md.
+#           into updates/. See docs/audio.md.
 #   opencl- GPU compute for Resolve lives in a Flatpak runtime whose hashed
 #           path changes on every runtime update. The ICD file is repointed
 #           here, but the linker and libclc parts are NOT automated: doing
@@ -123,91 +123,19 @@ fi
 
 #------------------------------------------------------------- OpenCL / rusticl
 fi
-if sel opencl; then
-say ""; say "[opencl]"
-  ICD=/etc/OpenCL/vendors/rusticl.icd
-  LIB=$(find /var/lib/flatpak/runtime -name 'libRusticlOpenCL.so.1' 2>/dev/null | head -1)
-  if [ -z "$LIB" ]; then
-    bad "no rusticl driver anywhere under /var/lib/flatpak/runtime"
-    hint "flatpak install org.freedesktop.Platform.GL//25.08   # or any GL-using app"
-  else
-    CUR_ICD=$(cat "$ICD" 2>/dev/null)
-    if [ "$CUR_ICD" = "$LIB" ]; then
-      ok "rusticl ICD current"
-    else
-      say "  ICD needs repointing:"
-      say "    was: ${CUR_ICD:-(missing)}"
-      say "    now: $LIB"
-      if can opencl; then
-        mkdir -p /etc/OpenCL/vendors
-        printf '%s\n' "$LIB" > "$ICD"
-        ok "ICD repointed"
-      fi
-    fi
-    # DELIBERATELY NOT AUTOMATED.
-    #
-    # An earlier version of this script made GPU OpenCL work by putting the
-    # Flatpak runtime on the *global* linker search path and by staging libclc
-    # bitcode at /usr/lib/x86_64-linux-gnu/GL/default/share/clc. Both broke the
-    # graphical login: KWin would not start because Mesa resolved to the wrong
-    # runtime. Recovery meant deleting /usr/lib/x86_64-linux-gnu/GL, removing
-    # the ld.so.conf.d drop-in and rebuilding the ld cache.
-    #
-    # A global ld.so.conf entry cannot be scoped to one application, so this
-    # script will not create one again. GPU OpenCL for Resolve has to come
-    # from a per-process wrapper, not a system-wide linker change.
-  fi
-  # The dangerous leftover is the global linker entry. That one put Flatpak Mesa
-  # on the system-wide search path and stopped KWin starting, so it must never
-  # exist. LD_LIBRARY_PATH inside resolve-200 is the supported mechanism.
-  if [ -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf ]; then
-    bad "global linker entry for the Flatpak runtime is present - this breaks the desktop"
-    hint "sudo rm -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf && sudo ldconfig"
-  fi
-
-  # /usr/lib/x86_64-linux-gnu/GL/default/share/clc is a hardcoded *Debian* path
-  # rusticl looks in for libclc bitcode; it has no environment override. Two
-  # inert .spv data files are staged there on purpose. Anything else in that
-  # tree - especially a library - would be a leftover from the broken attempt.
-  CLCD=/usr/lib/x86_64-linux-gnu/GL/default/share/clc
-  if [ -d /usr/lib/x86_64-linux-gnu/GL ]; then
-    STRAY=$(find /usr/lib/x86_64-linux-gnu/GL -type f ! -name '*.spv' 2>/dev/null | head -5)
-    if [ -n "$STRAY" ]; then
-      bad "non-bitcode files under the staged libclc path:"
-      printf '%s\n' "$STRAY" | sed 's/^/    /'
-      hint "sudo rm -rf /usr/lib/x86_64-linux-gnu/GL"
-    elif [ -f "$CLCD/spirv-mesa3d-.spv" ]; then
-      ok "libclc bitcode staged (data only, shadows nothing on openSUSE)"
-    fi
-  else
-    warn "libclc bitcode not staged; rusticl will fail to load"
-    hint "copy spirv-mesa3d-.spv and spirv64-mesa3d-.spv from the Flatpak"
-    hint "GL runtime into $CLCD"
-  fi
-
-  # clinfo must be run the way the launcher runs it, otherwise it reports no
-  # GPU even when Resolve has one.
-  if command -v clinfo >/dev/null; then
-    RT=""
-    if [ -r "$ICD" ]; then
-      D=$(cat "$ICD" 2>/dev/null | head -1)
-      [ -e "$D" ] && RT=$(dirname "$D")
-    fi
-    CI=$(LD_LIBRARY_PATH="$RT" RUSTICL_ENABLE=radeonsi clinfo 2>/dev/null)
-    NGPU=$(printf '%s\n' "$CI" | grep -cE "Device Type +GPU")
-    if [ "${NGPU:-0}" -ge 1 ]; then
-      ok "GPU OpenCL present"
-      printf '%s\n' "$CI" | grep -E "Device Name|Device Type|Max compute" | head -3 | sed 's/^/    /'
-    elif printf '%s\n' "$CI" | grep -q rusticl; then
-      warn "rusticl loaded but advertises no GPU (RUSTICL_ENABLE not honoured?)"
-    else
-      warn "no GPU OpenCL device; Resolve will use CPU"
-    fi
-  fi
-fi
 
 #------------------------------------------------------------------------ audio
 if sel audio; then
+say ""; say "[desktop safety]"
+# Not an OpenCL feature. This global linker entry puts the Flatpak Mesa runtime on
+# the system-wide search path and stops KWin starting, so it must never exist.
+# Kept after the OpenCL/Resolve sections were removed: it guards the desktop
+# itself, not any one application.
+if [ -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf ]; then
+  bad "global linker entry for the Flatpak runtime is present - this breaks the desktop"
+  hint "sudo rm -f /etc/ld.so.conf.d/zz-rusticl-runtime.conf && sudo ldconfig"
+fi
+
 say ""; say "[audio]"
 
 # --- HDA runtime power management: the documented cause of total silence ---
@@ -244,12 +172,12 @@ case "$RESOLVED" in
 esac
 # Check DKMS directly instead of delegating to scripts/imac-audio-module
 # --check, which inspected the ext01 layout that DKMS beats. That script is
-# SUPERSEDED; the codec path is DKMS. See docs/fixes.md.
+# SUPERSEDED; the codec path is DKMS. See docs/audio.md.
 if dkms status 2>/dev/null | grep -qi macbookpro; then
   dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/  /'
 else
   warn "no DKMS codec registered for the CS8409"
-  hint "sudo dkms install --force snd-hda-macbookpro/0.1   # see docs/fixes.md"
+  hint "sudo dkms install --force snd-hda-macbookpro/0.1   # see docs/audio.md"
 fi
 
 # --- PipeWire routing ---
@@ -269,113 +197,6 @@ else
 fi
 
 #------------------------------------------------------------------------- SDDM
-fi
-if sel sddm; then
-say ""; say "[sddm greeter]"
-# The greeter is fixed by a DPI-deriving DisplayCommand wrapper, NOT by
-# QT_SCALE_FACTOR: the greeter runs on Xorg at 96 DPI on a 5K panel.
-# The greeter is Qt6 on Wayland (kwin_wayland). Scale it with these keys -
-# verified working 2026-10-04.
-#
-# Two traps this check exists to catch:
-#   * GreeterEnvironment separates variables with COMMAS. A semicolon makes SDDM
-#     discard the whole string silently, which looks like the setting does
-#     nothing at all.
-#   * EnableHiDPI is read from [Wayland] and [X11], NOT [Theme] as the
-#     sddm.conf(5) man page implies.
-say "  --- greeter (Qt6 / Wayland) ---"
-GE=""
-HIDPI=0
-for f in /etc/sddm.conf /etc/sddm.conf.d/*.conf; do
-  [ -f "$f" ] || continue
-  g=$(awk '/^\[General\]/{t=1;next} /^\[/{t=0} t&&/^GreeterEnvironment=/{print;exit}' "$f" 2>/dev/null)
-  [ -n "$g" ] && GE="$g"
-  if grep -qE '^EnableHiDPI=true' "$f" 2>/dev/null; then HIDPI=1; fi
-done
-if [ -n "$GE" ]; then
-  ok "GreeterEnvironment set: $(echo "$GE" | cut -c1-64)"
-  case "$GE" in
-    *";"*) bad "GreeterEnvironment uses SEMICOLONS - SDDM needs COMMAS"
-           hint "separate the variables with , instead of ;" ;;
-    *",QT_"*) ok "comma-separated (correct for SDDM)" ;;
-    *)       warn "only one variable present - if scaling is still wrong, check the separators" ;;
-  esac
-  case "$GE" in
-    *QT_SCREEN_SCALE_FACTORS*) ok "Qt6 scale factor present for the greeter" ;;
-    *) warn "QT_SCREEN_SCALE_FACTORS missing from GreeterEnvironment" ;;
-  esac
-else
-  bad "GreeterEnvironment not set - the greeter will render at 100%"
-  hint "in [General]: GreeterEnvironment=QT_SCREEN_SCALE_FACTORS=2.0,QT_FONT_DPI=192"
-fi
-if [ "$HIDPI" -eq 1 ]; then
-  ok "EnableHiDPI=true present (must be in [Wayland] and/or [X11], not [Theme])"
-else
-  bad "EnableHiDPI=true not set"
-  hint "set it under [Wayland] and [X11]"
-fi
-# session restore reopens every window at login.
-KSMRC=$UHOME/.config/ksmserverrc
-if grep -qx 'restoreOnLogin=false' "$KSMRC" 2>/dev/null; then
-  ok "session restore disabled (windows will not reopen at login)"
-else
-  warn "session restore still enabled - windows reopen at login"
-  hint "printf '\\n[Session]\\nrestoreOnLogin=false\\n' >> $KSMRC"
-fi
-say "  applies at next login (never restart sddm mid-session)"
-
-#--------------------------------------------------------------------- resolve
-fi
-if sel resolve; then
-say ""; say "[resolve]"
-if [ -d /opt/resolve ]; then
-  ok "installed"
-  [ -x /usr/local/bin/resolve-200 ] && ok "200% wrapper present" || warn "wrapper missing"
-  # Resolve is Qt 5.15 under XWayland: QT_SCALE_FACTOR is ignored for widget
-  # geometry unless high-DPI scaling is explicitly enabled. Check both the
-  # wrapper and the desktop entry (which now carries the vars inline).
-  DE=/usr/share/applications/com.blackmagicdesign.resolve.desktop
-  # strip only the leading "Exec=" - the value itself contains '=' characters
-  EXEC=$(sed -n 's/^Exec=//p' "$DE" 2>/dev/null | head -1)
-  if printf '%s' "$EXEC" | grep -q "QT_ENABLE_HIGHDPI_SCALING=1" \
-     && printf '%s' "$EXEC" | grep -q "QT_SCALE_FACTOR=2"; then
-    ok "desktop entry carries the Qt5 high-DPI vars"
-  elif printf '%s' "$EXEC" | grep -q "resolve-200"; then
-    ok "desktop entry uses the scaled wrapper"
-  else
-    warn "desktop entry launches unscaled"
-    hint "Exec should set QT_ENABLE_HIGHDPI_SCALING=1 and QT_SCALE_FACTOR=2"
-  fi
-  if [ -x /usr/local/bin/resolve-200 ] \
-     && ! grep -q QT_ENABLE_HIGHDPI_SCALING /usr/local/bin/resolve-200; then
-    warn "wrapper lacks QT_ENABLE_HIGHDPI_SCALING=1 - Resolve will stay 100%"
-  fi
-  # Resolve bundles its own APR, but the installer check needs the sonames.
-  # Use absolute paths: sudo -S sessions can have a minimal PATH.
-  LDC=$(command -v ldconfig 2>/dev/null)
-  [ -x "$LDC" ] || for c in /usr/sbin/ldconfig /sbin/ldconfig /usr/bin/ldconfig; do
-    [ -x "$c" ] && { LDC=$c; break; }; done
-  [ -x "$LDC" ] || LDC=ldconfig
-  # Read the cache once. `grep -q` in a pipeline under `set -o pipefail`
-  # returns 141 (SIGPIPE) even on a match, so avoid -q and test the output.
-  CACHE_OUT=$("$LDC" -p 2>/dev/null || true)
-  for so in libapr-1 libaprutil-1; do
-    # match the soname field exactly (tab + name + space) so libapr-1
-    # cannot accidentally match libaprutil-1
-    HIT=$(printf '%s\n' "$CACHE_OUT" | grep -E "	${so}\.so\.0 " || true)
-    if [ -n "$HIT" ]; then
-      ok "$so.so.0 -> ${HIT##*=> }"
-    elif [ -e "/usr/local/lib/$so.so.0" ]; then
-      warn "$so.so.0 on disk but not in ld.so.cache - run: $LDC"
-    else
-      warn "$so.so.0 missing (installer package check would fail)"
-    fi
-  done
-else
-  warn "not installed"
-fi
-
-#-------------------------------------------------------------------- plymouth
 fi
 if sel boot; then
 say ""; say "[boot]"

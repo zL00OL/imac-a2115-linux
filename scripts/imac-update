@@ -21,7 +21,7 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 # (snd-hda-macbookpro/0.1), which rebuilds itself for each new kernel. It is
 # still checked here, because a kernel that arrives without a built module
 # boots with no patched codec and the internal speakers are silent.
-# See docs/fixes.md - scripts/imac-audio-module is SUPERSEDED and is not used.
+# See docs/audio.md - scripts/imac-audio-module is SUPERSEDED and is not used.
 #==============================================================================
 set -uo pipefail
 
@@ -259,12 +259,12 @@ step "4b. audio codec module for kernel $NEWEST2"
 # (The old code shelled out to scripts/imac-audio-module, which builds into
 # updates/ext01. That path was measured to lose the codec bind to DKMS on this
 # machine, so routing the update path through it was sending people to the
-# wrong mechanism. See docs/fixes.md.)
+# wrong mechanism. See docs/audio.md.)
 DKMS_LINE=$(dkms status 2>/dev/null | grep -i macbookpro | head -1)
 if [ -z "$DKMS_LINE" ]; then
   bad "no DKMS codec registered - the speakers WILL be silent after reboot"
   hint "sudo dkms install --force snd-hda-macbookpro/0.1"
-  hint "see docs/fixes.md for the driver source and build guards"
+  hint "see docs/audio.md for the driver source and build guards"
 else
   ok "DKMS codec registered: $DKMS_LINE"
   if dkms status 2>/dev/null | grep -qi ", $NEWEST2,"; then

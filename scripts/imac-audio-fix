@@ -26,7 +26,7 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 #   --check is still a useful read-only survey. But running it applies settings
 #   that push the codec back toward the broken state.
 #
-#   What to use instead: docs/fixes.md, "Internal speakers". In short - DKMS is
+#   What to use instead: docs/audio.md, "Internal speakers". In short - DKMS is
 #   correct and expected, power_save=0 is required, and forcing a 4-channel
 #   profile is not.
 #

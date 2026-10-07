@@ -58,7 +58,7 @@
 #
 # Retained for the record and for --check. To install the codec, use DKMS:
 #   sudo dkms install --force snd-hda-macbookpro/0.1
-# See docs/fixes.md.
+# See docs/audio.md.
 #==============================================================================
 set -uo pipefail
 
@@ -129,7 +129,7 @@ done
   Install it from https://github.com/jackdanyell/imac18-3-cs8409-linux-audio"
 
 # ------------------------------------------------------
-# docs/fixes.md and this script DISAGREE about whether the CS8409 codec driver
+# docs/audio.md and this script DISAGREE about whether the CS8409 codec driver
 # should be installed by DKMS or hand-placed into updates/ext01, and the answer
 # cannot be written down until it is read off the machine:
 #
@@ -175,7 +175,7 @@ if [ "$CHECK" -eq 1 ]; then
     *)                 warn "the in-tree/DKMS module wins, not ext01" ;;
   esac
   if dkms status 2>/dev/null | grep -qi macbookpro; then
-    ok "davidjo DKMS driver registered - it rebuilds itself per kernel (docs/fixes.md says this is the working configuration)"
+    ok "davidjo DKMS driver registered - it rebuilds itself per kernel (docs/audio.md says this is the working configuration)"
   fi
   if [ "$TARGET" = "$RUNNING" ]; then
     say "  (target is the running kernel - a reboot is required to load it)"

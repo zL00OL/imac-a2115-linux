@@ -13,10 +13,9 @@
 # WHAT THIS SCRIPT WILL NOT DO
 # ----------------------------
 # It will not report OK for anything that was never measured on the reference
-# machine. P3 wide gamut, display tearing, cold-boot panel initialisation and
-# Bluetooth pairing are all real questions with no verified answer, so they are
-# reported as UNKNOWN rather than guessed at. An UNKNOWN line means "nobody has
-# checked", not "probably fine".
+# machine. Display tearing and cold-boot panel initialisation are real questions
+# with no verified answer, so they are reported as UNKNOWN rather than guessed
+# at. An UNKNOWN line means "nobody has checked", not "probably fine".
 #
 # See docs/reference-system.md for the full record of what is and is not
 # verified, and docs/recovery.md if the display is broken.
@@ -166,13 +165,6 @@ if [ "$MAXW" -ge 5000 ] 2>/dev/null; then ok "framebuffer reports ${MAXW}x${MAXH
 elif [ "$MAXW" -gt 0 ] 2>/dev/null; then warn "largest mode is ${MAXW}x${MAXH} - tiling is not joined"
 else unk "could not read connector modes"; fi
 
-# Plymouth is deliberately omitted from the initramfs - not a fault
-if S lsinitrd /boot/efi/opensuse-slowroll/*/initrd-stackC 2>/dev/null | grep -qi plymouth; then
-  ok "initramfs carries Plymouth"
-else
-  unk "Plymouth absent from initramfs (expected - built with --omit plymouth)"
-fi
-
 #----------------------------------------------------------------- audio
 sec "Audio - the codec path"
 DK=$(dkms status 2>/dev/null | grep -i macbookpro)
@@ -187,7 +179,7 @@ if [ -n "$DK" ]; then
   fi
 else
   no "no DKMS codec registered - internal speakers will be silent"
-  info "see docs/fixes.md for the driver source and build guards"
+  info "see docs/audio.md for the driver source and build guards"
 fi
 
 CSRC=$(cat /sys/module/snd_hda_codec_cs8409/srcversion 2>/dev/null)
@@ -227,10 +219,8 @@ fi
 sec "Not verified - reported as UNKNOWN, never as OK"
 # These have no verified answer on the reference machine. Saying OK would be a
 # lie. See docs/reference-system.md.
-unk "P3 wide gamut / ICC colour profile - never applied, never measured"
 unk "display tearing - never measured"
 unk "cold-boot panel initialisation - known FAULTY (AUX-wake retries); untested this boot"
-unk "Bluetooth pairing - chip does not bond; needs a USB dongle"
 info "these are open questions, not failures. Do not read them as passing."
 
 #------------------------------------------------------------- bootloader

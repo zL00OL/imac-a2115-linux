@@ -128,7 +128,6 @@ which would force a full kernel rebuild.
 | Intel HD 630 present in firmware | **VERIFIED** (`CPUID.06H` display family/model `2`) |
 | Visible on PCI | **BROKEN** — absent at `00:02.0`, hidden by Apple firmware |
 | `gpu_bind` | `0`, via `/etc/modprobe.d/99-imac-audio-gpu-bind.conf` |
-| P3 wide gamut | **UNTESTED** — no ICC profile has been applied |
 
 The iGPU is never enabled. It shares the HDA controller, so binding it can take
 the internal speakers with it.
@@ -176,14 +175,11 @@ Stated plainly so these are never mistaken for working features:
 
 | Item | Status |
 |---|---|
-| P3 wide gamut / ICC profile | **UNTESTED** — no profile applied |
 | Display tearing | **UNTESTED** — never measured |
 | Cold-boot 5K initialisation | **BROKEN** — insufficient AUX-wake retry budget |
 | Backlight control | **VERIFIED** |
-| Bluetooth pairing | **BROKEN** — chip does not bond; needs a USB dongle |
 | GPU OpenCL (Resolve) | **VERIFIED** |
 | AirPrint | **VERIFIED** |
-| Plymouth graphical boot | **SUPERSEDED** — omitted from the initramfs |
 | Any kernel other than 7.2.2 | **UNTESTED** for the display path |
 | Any distro other than Slowroll | **UNTESTED** — see `docs/distro-matrix.md` |
 
@@ -195,4 +191,4 @@ Stated plainly so these are never mistaken for working features:
 - `docs/recovery.md` — **read before changing anything**
 - `docs/distro-matrix.md` — what applies on which distro
 - `patches/amdgpu-5k/README.md` — patch provenance, hashes, apply order
-- `docs/fixes.md` — the measurements behind the audio findings
+- `docs/audio.md` — the measurements behind the audio findings

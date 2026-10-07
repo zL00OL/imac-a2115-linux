@@ -73,7 +73,8 @@ patches/imac5k-stitch-layer-7.x.patch     provides the tiled_stitch parameter
 ```
 
 They are a **stack, not alternatives** — the second is applied on top of the
-first. Their build script `scripts/patch-imac5k-amdgpu.sh` also pulls a base
+first. **Their** build script (`patch-imac5k-amdgpu.sh`, in *their* repo, not
+this one) also pulls a base
 patch set from a separate `omarchy-pkgs` repo and uses `pacman` and
 `mkinitcpio`, so **it cannot be run verbatim on openSUSE**. Those base patches
 belong to their kernel fork and must not be applied to openSUSE's

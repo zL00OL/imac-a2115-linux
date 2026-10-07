@@ -87,7 +87,7 @@ Any theme that sizes its UI from the reported DPI therefore draws 1:1 into a
 5120x2880 root window and looks tiny.
 
 The user session is Plasma on Wayland and is unaffected. This is a
-greeter-only problem. Fix in `docs/fixes.md#sddm`.
+greeter-only problem. Fix in `docs/audio.md#sddm`.
 
 ### Network: IPv6-only hosts fail silently
 
