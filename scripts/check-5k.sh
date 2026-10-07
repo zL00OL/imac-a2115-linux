@@ -26,7 +26,7 @@ hr; echo "1. KERNEL TILING PARAMETER"
 if [ -r /sys/module/amdgpu/parameters/tiled_stitch ]; then
   T=$(cat /sys/module/amdgpu/parameters/tiled_stitch)
   if [ "$T" = "-1" ]; then good "tiled_stitch=-1 (tiling ON, the verified value)"
-  elif [ "$T" = "1" ]; then warn "tiled_stitch=1 — UNVERIFIED on this machine; the docs standardise on -1"
+  elif [ "$T" = "1" ]; then warn "tiled_stitch=1 — the documented value is -1; 1 has never been verified here"
   else bad "tiled_stitch=$T (tiling OFF - two separate displays)"; fi
 else
   bad "/sys/module/amdgpu/parameters/tiled_stitch missing"
@@ -158,7 +158,7 @@ hr; echo "7. SUMMARY"
 T=$(cat /sys/module/amdgpu/parameters/tiled_stitch 2>/dev/null || echo "?")
 session_outputs
 cat <<EOF
-  tiling parameter : $T  (cmdline value is -1; the sysfs readback is UNVERIFIED - see docs/tiled-5k.md)
+  tiling parameter : $T  (cmdline and sysfs both read -1 on the reference system)
   compositor views : $NOUT  (want 1)
   connectors live  : $NC  (want >= 2)
 

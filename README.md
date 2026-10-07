@@ -42,6 +42,11 @@ the sibling `docs/distro-matrix.md` used to claim that and it was wrong.
 
 ## Start here
 
+> **Before you change anything:** read [`docs/recovery.md`](docs/recovery.md).
+> The patched `amdgpu` lives only inside a custom initramfs, so a careless
+> rebuild costs you the display — and on an unattended machine that means
+> physical access to get back in.
+
 ```bash
 # read-only diagnostic: is tiling actually on, and what is the seam made of?
 sudo scripts/check-5k.sh
@@ -78,7 +83,7 @@ requires a reboot. Verify it is actually in effect rather than assuming:
 ```bash
 # the kernel command line is the source of truth
 grep tiled_stitch /proc/cmdline                   # expect: amdgpu.tiled_stitch=-1
-cat /sys/module/amdgpu/parameters/tiled_stitch    # UNVERIFIED - see note below
+cat /sys/module/amdgpu/parameters/tiled_stitch    # expect: -1 (verified on the reference system)
 ```
 
 If `tiled_stitch` is not a parameter your kernel exposes, the driver has
@@ -101,6 +106,7 @@ before changing anything.
 
 | Path | |
 |---|---|
+| `docs/recovery.md` | **read this before changing anything** — how to get back from a black screen, a lost initramfs, or an unbound device |
 | `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
 | `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
 | `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order (**not MIT** — see `THIRD_PARTY_NOTICES.md`) |

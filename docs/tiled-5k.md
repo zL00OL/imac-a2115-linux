@@ -39,7 +39,7 @@ starts, so it comes from the kernel command line.
 
 ```bash
 grep tiled_stitch /proc/cmdline                # want: amdgpu.tiled_stitch=-1
-cat /sys/module/amdgpu/parameters/tiled_stitch   # UNVERIFIED - see the note above
+cat /sys/module/amdgpu/parameters/tiled_stitch   # expect: -1 (measured; see "The sysfs/cmdline readback" below)
 ```
 
 | Value | Meaning |
