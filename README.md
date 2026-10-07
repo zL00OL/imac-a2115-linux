@@ -8,7 +8,8 @@ Every claim in this repository was verified on exactly this configuration.
 Anything not verified on it is labelled EXPERIMENTAL, BROKEN, SUPERSEDED or
 UNTESTED in the page that discusses it.
 
-|---|---|---|
+| | |
+| --- | --- |
 | **Machine** | iMac 19,1 / A2115 (27-inch, 2019) — **VERIFIED** |
 | **CPU** | Intel Core i5-8500 — **VERIFIED** |
 | **GPU** | AMD Ellesmere (`polaris10`), 4 GiB — see note below |
