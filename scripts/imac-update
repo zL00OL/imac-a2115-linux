@@ -248,10 +248,10 @@ else
 fi
 
 #------------------------------- 4b. rebuild the audio codec for the new kernel
-# The patched CS8409 codec lives in updates/ext01 and is per-kernel. A new
-# kernel has no copy, so it must be rebuilt and installed or the speakers go
-# silent after the reboot. This has to happen for the kernel that will be
-# booted, not the one currently running.
+# The patched CS8409 codec is per-kernel: a new kernel needs its own build or
+# the speakers go silent after the reboot. This has to be true for the kernel
+# that WILL BE BOOTED, not the one currently running. (How it gets built is
+# DKMS, not updates/ext01 - see below.)
 step "4b. audio codec module for kernel $NEWEST2"
 # The codec is a DKMS module, so DKMS rebuilds it for every new kernel on its
 # own. There is nothing to invoke here - the job is to CONFIRM a module exists

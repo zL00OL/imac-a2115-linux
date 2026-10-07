@@ -1,5 +1,10 @@
 # Hardware and quirks
 
+> **Status: VERIFIED (machine identity).**
+> Hardware facts read off the reference machine. Where a quirk is listed it
+> is observed behaviour, not inference. The GPU is recorded by ASIC family
+> rather than marketing name — see `docs/reference-system.md`.
+
 ## What it is
 
 | | |

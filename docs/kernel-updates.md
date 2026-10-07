@@ -1,5 +1,10 @@
 # Kernel updates on the iMac19,1
 
+> **Status: VERIFIED for 7.2.2; 7.2.7 display build INCOMPLETE.**
+> The audio DKMS module is confirmed built for both 7.2.2 and 7.2.7. The
+> **display** patch has only ever been built for 7.2.2, so whether this
+> generalises past 7.2.x is **UNTESTED**.
+
 Updating the kernel is the one routine job on this machine that can cost you
 functionality you already had. Two subsystems have to be rebuilt for every new
 kernel — the CS8409 audio codec and the patched `amdgpu` — and only one of them

@@ -1,5 +1,10 @@
 # Distribution matrix
 
+> **Status: REFERENCE + UNTESTED for other distros.**
+> Everything here was verified on openSUSE Slowroll only. Every other
+> distribution named in this file is **UNTESTED** — the rows describe what
+> *should* work and the commands to set the parameter, not observed results.
+
 What applies where. The reference system is openSUSE **Slowroll**, but
 most of this is portable.
 
@@ -72,12 +77,27 @@ amdgpu.tiled_stitch=-1
 | Debian/Ubuntu | `/etc/default/grub.d/` snippet, or `GRUB_CMDLINE_LINUX_DEFAULT` |
 | NixOS | `boot.kernelParams` |
 
-Reboot required. Verify with `cat /sys/module/amdgpu/parameters/tiled_stitch`
-→ expect `1`.
+Reboot required. Verify with:
 
-Nothing else was needed on the reference system: no patched driver, no EDID
-override, no per-connector fixes. If you *do* get a seam, the likely difference
-is **fractional scaling** — force scale `1` first.
+```bash
+grep tiled_stitch /proc/cmdline                          # expect -1
+cat /sys/module/amdgpu/parameters/tiled_stitch           # expect -1
+```
+
+Both read `-1` on the reference system — see `docs/tiled-5k.md`. An earlier
+revision of this page said to expect `1`; that was wrong, and `1` has never been
+verified here.
+
+**A patched `amdgpu` is required.** An earlier revision of this page said "no
+patched driver" was needed, and that was also wrong — a stock `amdgpu` has no
+`tiled_stitch` parameter at all, so there is nothing to set. The six patches in
+`patches/amdgpu-5k/` and the patched initramfs are the whole point; see
+`docs/tiled-5k.md` and `docs/recovery.md`.
+
+Beyond the patch and the parameter, nothing else was needed on the reference
+system: no EDID override, no per-connector fixes. If you *do* get a seam with
+the patch applied, the likely difference is **fractional scaling** — force scale
+`1` first.
 
 ## Tier 3: distro-specific, do not port
 

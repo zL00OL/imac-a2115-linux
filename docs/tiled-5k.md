@@ -1,5 +1,10 @@
 # Tiled 5K: diagnosing and fixing the seam
 
+> **Status: VERIFIED for seamless tiling.**
+> The seam was diagnosed and fixed on the reference machine. `tiled_stitch=-1`
+> is measured in both sysfs and the kernel command line. Cold-boot panel
+> initialisation remains **BROKEN** — see `docs/kernel-updates.md`.
+
 The panel is two 2560x1440 halves that must behave as **one seamless
 5120x2880 desktop**. This document covers how to tell what is actually wrong,
 because the symptoms overlap and the causes are different.

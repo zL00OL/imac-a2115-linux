@@ -1,7 +1,14 @@
 # Other fixes (secondary)
 
-These are all **optional**. The 5K tiled display — the reason this repo exists —
-works without any of them.
+> **Status: MIXED — see the per-section labels.**
+> Sections here carry different verdicts and are dated. The audio sections are
+> the load-bearing ones: the DKMS verdict is **VERIFIED** by measurement, the
+> `updates/ext01` approach is **SUPERSEDED**, and the 4-channel enumeration is
+> **BROKEN**. Internal speakers work on the 2-channel `analog-stereo` path.
+> Do not read one section's verdict as applying to the file.
+
+These are all **optional** for the display. The 5K tiled display — the reason
+this repo exists — works without any of them.
 
 Distro used: openSUSE **Slowroll** (see `docs/distro-matrix.md` for why this over
 Tumbleweed). Portability notes in

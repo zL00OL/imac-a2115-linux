@@ -1,5 +1,9 @@
 # Troubleshooting
 
+> **Status: VERIFIED for the failure modes listed.**
+> Every entry here was actually hit on this machine and diagnosed. Entries
+> marked BROKEN are known faults with no fix yet, not untested guesses.
+
 Failure modes that cost time on this machine. Several were misdiagnosed before
 being understood.
 

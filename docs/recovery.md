@@ -1,5 +1,10 @@
 # Recovery
 
+> **Status: VERIFIED — the unbound-device case is real.**
+> Recovery 3 was written after an actual incident on this machine, not
+> hypothetically. The others follow the same failure paths and are written
+> conservatively.
+
 **Read this before changing anything on this machine.**
 
 The tiled 5K display depends on a hand-patched `amdgpu` carried inside a
