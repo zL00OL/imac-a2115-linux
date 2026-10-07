@@ -93,7 +93,9 @@ if [ "$CUR" = "$NEWEST" ]; then
 elif echo "$K" | grep -qx "$CUR"; then
   warn "REBOOT PENDING: running $CUR, newest installed is $NEWEST"
   say "    the patched audio codec and the 5K initrd are per-kernel."
-  say "    Rebuild the codec for it first:  sudo ~/bin/imac-audio-module --kernel $NEWEST"
+  say "    DKMS rebuilds the codec by itself; confirm a build exists for $NEWEST:"
+  say "      dkms status | grep macbookpro"
+  say "    If it does not:  sudo dkms install --force snd-hda-macbookpro/0.1 -k $NEWEST"
   say "    After reboot verify: tiled 5K output, then audio."
 else
   warn "running $CUR is not among installed: $(echo "$K" | tr '\n' ' ')"
@@ -235,15 +237,19 @@ fi
 RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
 say "  cs8409 module: ${RESOLVED:-not found}"
 case "$RESOLVED" in
-  */updates/ext01/*) ok "patched driver active via updates/ext01" ;;
-  "")                bad "no cs8409 module found" ;;
-  *)                 warn "the in-tree module wins, not the patched updates/ext01 build"
-                     hint "sudo ~/bin/imac-audio-module" ;;
+  */updates/*) ok "patched DKMS codec active via updates/" ;;
+  "")          bad "no cs8409 module found" ;;
+  *)           warn "the in-tree codec wins, not the DKMS build"
+               hint "sudo dkms install --force snd-hda-macbookpro/0.1" ;;
 esac
-if [ -x "$UHOME/bin/imac-audio-module" ]; then
-  "$UHOME/bin/imac-audio-module" --check 2>&1 | grep -E '^\s+\[(warn|FAIL|ok)\]' | sed 's/^/  /'
+# Check DKMS directly instead of delegating to scripts/imac-audio-module
+# --check, which inspected the ext01 layout that DKMS beats. That script is
+# SUPERSEDED; the codec path is DKMS. See docs/fixes.md.
+if dkms status 2>/dev/null | grep -qi macbookpro; then
+  dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/  /'
 else
-  warn "imac-audio-module not installed; run it after a kernel update"
+  warn "no DKMS codec registered for the CS8409"
+  hint "sudo dkms install --force snd-hda-macbookpro/0.1   # see docs/fixes.md"
 fi
 
 # --- PipeWire routing ---

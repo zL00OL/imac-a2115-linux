@@ -7,24 +7,45 @@
 #   sudo imac-audio-module --check
 #   sudo imac-audio-module --uninstall
 #
-# Why this exists - and an OPEN QUESTION about DKMS
-# --------------------------------------
-# The Apple CS8409 driver (jackdanyell/imac18-3-cs8409-linux-audio, v0.2) has
-# two conflicting reports on its tracker:
+# SUPERSEDED - DO NOT USE THIS TO INSTALL THE CODEC
+# ------------------------------------------------
+# The internal speakers work through DKMS, not through this script. Measured on
+# the reference machine 2026-10-06:
+#
+#   $ dkms status
+#   snd-hda-macbookpro/0.1, 7.2.2-1-default, x86_64: installed (Original modules exist)
+#   snd-hda-macbookpro/0.1, 7.2.7-1-default, x86_64: installed (Original modules exist)
+#
+#   $ modinfo -n snd_hda_codec_cs8409
+#   /usr/lib/modules/7.2.2-1-default/updates/snd-hda-codec-cs8409.ko.zst
+#   $ cat /sys/module/snd_hda_codec_cs8409/srcversion
+#   5957235DD0C11693189E2C5        # matches modinfo -F srcversion
+#
+# The driver that actually runs is that DKMS build. Use it.
+#
+# WHY THIS SCRIPT WAS WRONG
+# -------------------------
+# It was written from two conflicting reports on the driver tracker, and picked
+# the hand-installed path:
 #
 #   issue #2 - internal speakers WORK. Installed by hand into
-#              /lib/modules/<k>/updates/ext01/, leaving the in-tree module
-#              in place.
-#   issue #3 - no PCM device registered at all, and silent speakers.
-#              Installed via DKMS, which archives the in-tree module and
-#              installs into updates/dkms/.
+#              /lib/modules/<k>/updates/ext01/, leaving the in-tree module in place.
+#   issue #3 - no PCM device at all, silent. Installed via DKMS, which archives
+#              the in-tree module and installs into updates/dkms/.
 #
-# updates/ext01 sorts before updates/dkms, so a module placed there wins the
-# codec bind. DKMS cannot express that ordering, so DKMS is not used HERE.
+# The reasoning was that "updates/ext01 sorts before updates/dkms, so a module
+# placed there wins the codec bind", and therefore DKMS could not be used. That
+# premise is false in practice: this DKMS package installs into updates/, NOT
+# updates/dkms/. There is no sort-order race to win, and DKMS works fine.
 #
-# That reasoning is why this script exists, but docs/fixes.md contradicts it and
-# records measurements to the opposite effect. Read the open question at the
-# DKMS check further down before concluding anything about DKMS.
+# WHAT IS STILL TRUE HERE, and worth keeping
+# ------------------------------------------
+# The Apple code sits behind two compile-time guards, APPLE_CODECS and
+# APPLE_PINSENSE_FIXUP. Without them the module builds cleanly and loads, but
+# the amplifier/pin handling is compiled out. They must be added to the cirrus
+# Makefile rather than passed as KCFLAGS, so only that directory rebuilds.
+# That is real, hard-won knowledge about building this driver - but it belongs
+# to a DKMS build, and the packaging here does not do that.
 #
 # The Apple code also sits behind two compile-time guards, APPLE_CODECS and
 # APPLE_PINSENSE_FIXUP. Without them the module builds cleanly and loads, but
@@ -34,6 +55,10 @@
 #
 # Caveat: the module is unsigned. This iMac has no Secure Boot, so it loads
 # and merely taints the kernel.
+#
+# Retained for the record and for --check. To install the codec, use DKMS:
+#   sudo dkms install --force snd-hda-macbookpro/0.1
+# See docs/fixes.md.
 #==============================================================================
 set -uo pipefail
 
@@ -103,16 +128,6 @@ done
 [ -n "$SRC" ] || die "driver source not found in /usr/src (expected snd_hda_macbookpro-0.2).
   Install it from https://github.com/jackdanyell/imac18-3-cs8409-linux-audio"
 
-#
-# SETTLED 2026-10-06: DKMS is correct on this machine. dkms status reports
-# snd-hda-macbookpro/0.1 installed for both kernels, and the loaded module is
-# /usr/lib/modules/7.2.2-1-default/updates/snd-hda-codec-cs8409.ko.zst
-# (srcversion 5957235DD0C11693189E2C5, matching /sys/module). The ordering
-# argument below is therefore wrong in practice: DKMS installs into updates/,
-# not updates/dkms/, so there is no sort-order race to win. See docs/fixes.md.
-#
-# The ext01 mechanism in this script remains valid for a HAND-BUILT module; it
-# is simply not what makes the internal speakers work.
 # ------------------------------------------------------
 # docs/fixes.md and this script DISAGREE about whether the CS8409 codec driver
 # should be installed by DKMS or hand-placed into updates/ext01, and the answer

@@ -121,7 +121,7 @@ before changing anything.
 | `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
 | `scripts/imac-audio-fix` | **SUPERSEDED** — encodes the old "force 4-channel" diagnosis; kept for the record, `--check` only |
-| `scripts/imac-audio-module` | build/install a CS8409 codec module into `updates/ext01` for a kernel (for a *hand-built* module; the working codec config is DKMS — see [docs/fixes.md](docs/fixes.md)) |
+| `scripts/imac-audio-module` | **SUPERSEDED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/fixes.md](docs/fixes.md) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
 | `reference/resolve-200` | Resolve launcher: 200% scaling + `RUSTICL_ENABLE` |
 

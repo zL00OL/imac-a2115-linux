@@ -15,8 +15,9 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 #
 #     * It installs davidjo's driver via DKMS and forces the 4-channel
 #       enumeration (analog-surround-40) with a WirePlumber rule.
-#     * imac-audio-module and imac-reapply state DKMS must never be used and
-#       flag a DKMS registration as a FAIL.
+#     * At the time, imac-audio-module and imac-reapply stated DKMS must never
+#       be used and flagged a DKMS registration as a FAIL. That was WRONG, and
+#       has since been corrected in both: DKMS is the working path.
 #     * Measurement later showed the opposite: the 4-channel enumeration is the
 #       FAULTY one. The 2-channel analog-stereo enumeration is the working one,
 #       and on this machine it needs no configuration at all.
@@ -244,8 +245,8 @@ if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro/0.2'; then
 fi
 if [ -d /lib/modules/$(uname -r)/updates/ext01 ]; then
   if ls /lib/modules/$(uname -r)/updates/ext01/snd-hda-codec-cs8409.ko* >/dev/null 2>&1; then
-    warn "a hand-built ext01 module is present - remove it, it competes"
-    hint "sudo imac-audio-module --uninstall"
+    warn "a hand-built ext01 module is present alongside DKMS - remove it"
+    hint "rm -v /lib/modules/$(uname -r)/updates/ext01/snd-hda-codec-cs8409.ko*"
   fi
 fi
 

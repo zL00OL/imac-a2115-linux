@@ -17,9 +17,11 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 # Order matters: prune ESP -> update -> rebuild the audio codec for whatever
 # kernel is now newest -> re-apply -> (reboot).
 #
-# The audio step is not optional. The patched CS8409 codec is built per kernel
-# into updates/ext01 (see imac-audio-module for why DKMS is not used), so a new
-# kernel boots with no patched codec and the internal speakers are silent.
+# The audio step is not optional. The patched CS8409 codec is a DKMS module
+# (snd-hda-macbookpro/0.1), which rebuilds itself for each new kernel. It is
+# still checked here, because a kernel that arrives without a built module
+# boots with no patched codec and the internal speakers are silent.
+# See docs/fixes.md - scripts/imac-audio-module is SUPERSEDED and is not used.
 #==============================================================================
 set -uo pipefail
 
@@ -107,12 +109,15 @@ fi
 if [ "$DRY" -eq 1 ]; then
   say ""
   say "  [dry-run] would: prune stale BLS entries, run 'zypper up',"
-  say "  [dry-run] rebuild the audio codec for the newest kernel,"
+  say "  [dry-run] confirm a DKMS codec build exists for the newest kernel,"
   say "  [dry-run] re-run imac-reapply, and report."
   say ""
-  say "  audio codec status for the newest kernel:"
-  "$BIN/imac-audio-module" --check 2>/dev/null | grep -E '\[(warn|FAIL|ok)\]' | sed 's/^/    /' \
-    || say "    (imac-audio-module not installed)"
+  say "  audio codec status:"
+  if dkms status 2>/dev/null | grep -qi macbookpro; then
+    dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/    /'
+  else
+    say "    (no DKMS codec registered - speakers would be silent after reboot)"
+  fi
   say ""
   say "  pending updates:"
   zypper --non-interactive list-updates 2>/dev/null | head -30 | sed 's/^/    /' \
@@ -248,33 +253,27 @@ fi
 # silent after the reboot. This has to happen for the kernel that will be
 # booted, not the one currently running.
 step "4b. audio codec module for kernel $NEWEST2"
-AM="$BIN/imac-audio-module"
-if [ -x "$AM" ]; then
-  # Rebuilding is only needed when the kernel actually moved. If it did not,
-  # and a DKMS driver is already registered, rebuilding risks replacing a
-  # working module with one built from a mismatched source tree.
-  if [ "$CURV" = "$NEWEST2" ]; then
-    if dkms status 2>/dev/null | grep -qi macbookpro; then
-      say "  kernel unchanged and the DKMS driver rebuilds itself per kernel;"
-      say "  skipping the rebuild so a working module is not replaced."
-      say "  status: $(dkms status | grep -i macbookpro | head -1)"
-    else
-      say "  kernel unchanged; ensuring a codec module is present"
-      "$AM" --kernel "$NEWEST2" 2>&1 | sed 's/^/  /'
-      [ "${PIPESTATUS[0]}" -ne 0 ] && warn "codec module check/build reported problems"
-    fi
-  else
-    "$AM" --kernel "$NEWEST2" 2>&1 | sed 's/^/  /'
-    ARC=${PIPESTATUS[0]}
-    if [ "$ARC" -ne 0 ]; then
-      warn "the audio module could not be built for $NEWEST2 (rc=$ARC)"
-      warn "the speakers WILL be silent after rebooting into it"
-      say "  see /var/log/imac-audio-module.log"
-    fi
-  fi
+# The codec is a DKMS module, so DKMS rebuilds it for every new kernel on its
+# own. There is nothing to invoke here - the job is to CONFIRM a module exists
+# for the kernel that is about to boot, and to fail loudly if it does not.
+# (The old code shelled out to scripts/imac-audio-module, which builds into
+# updates/ext01. That path was measured to lose the codec bind to DKMS on this
+# machine, so routing the update path through it was sending people to the
+# wrong mechanism. See docs/fixes.md.)
+DKMS_LINE=$(dkms status 2>/dev/null | grep -i macbookpro | head -1)
+if [ -z "$DKMS_LINE" ]; then
+  bad "no DKMS codec registered - the speakers WILL be silent after reboot"
+  hint "sudo dkms install --force snd-hda-macbookpro/0.1"
+  hint "see docs/fixes.md for the driver source and build guards"
 else
-  bad "$AM missing - the audio codec will NOT be rebuilt for the new kernel"
-  hint "install scripts/imac-audio-module as ~/bin/imac-audio-module"
+  ok "DKMS codec registered: $DKMS_LINE"
+  if dkms status 2>/dev/null | grep -qi ", $NEWEST2,"; then
+    ok "a build exists for $NEWEST2 (the kernel about to boot)"
+  else
+    warn "no DKMS build listed for $NEWEST2 yet"
+    warn "dkms normally builds on kernel install; force it if it did not:"
+    hint "sudo dkms install --force snd-hda-macbookpro/0.1 -k $NEWEST2"
+  fi
 fi
 
 #------------------------------------------------- 5. per-package restarts
