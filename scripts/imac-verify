@@ -1,0 +1,264 @@
+#!/bin/bash
+#==============================================================================
+# imac-verify - one command that says whether this machine is actually working
+#
+#   sudo scripts/imac-verify
+#   sudo scripts/imac-verify --no-sudo      # skip the checks that need root
+#
+# Changes NOTHING. Read-only throughout.
+#
+# Paste the output into an issue. It answers, in one screen, the question that
+# "my screen looks wrong" cannot.
+#
+# WHAT THIS SCRIPT WILL NOT DO
+# ----------------------------
+# It will not report OK for anything that was never measured on the reference
+# machine. P3 wide gamut, display tearing, cold-boot panel initialisation and
+# Bluetooth pairing are all real questions with no verified answer, so they are
+# reported as UNKNOWN rather than guessed at. An UNKNOWN line means "nobody has
+# checked", not "probably fine".
+#
+# See docs/reference-system.md for the full record of what is and is not
+# verified, and docs/recovery.md if the display is broken.
+#==============================================================================
+set -uo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin
+
+SUDO_OK=1
+USE_SUDO=1
+for a in "$@"; do
+  case "$a" in
+    --no-sudo) USE_SUDO=0 ;;
+    -h|--help) sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//; s/^#$//'
+               exit 0 ;;
+    *) echo "unknown option: $a" >&2; exit 2 ;;
+  esac
+done
+
+S() { [ "$USE_SUDO" = 1 ] && [ "$SUDO_OK" = 1 ] && sudo -n "$@"; }
+
+PASS=0; FAIL=0; WARN=0; UNK=0
+ok()   { printf '  [ ok ] %s\n' "$*"; PASS=$((PASS+1)); }
+no()   { printf '  [FAIL] %s\n' "$*"; FAIL=$((FAIL+1)); }
+warn() { printf '  [warn] %s\n' "$*"; WARN=$((WARN+1)); }
+unk()  { printf '  [????] %s\n' "$*"; UNK=$((UNK+1)); }
+info() { printf '  ->     %s\n' "$*"; }
+sec()  { printf '\n%s\n' "$*"; }
+
+# Values verified on the reference machine (docs/reference-system.md)
+REF_PATCHED_SRCV=6BE242C1C62DD79046F2E9A
+REF_STOCK_SRCV=4FA5DDFCFF3DDAE9F5FE22E
+REF_STITCH=-1
+REF_KERNEL=7.2.2-1-default
+
+echo "=============================================================="
+echo " iMac A2115 - configuration verification   $(date -Is)"
+echo "=============================================================="
+echo " reference: docs/reference-system.md"
+echo " changes nothing; safe to run at any time"
+
+# root is needed for /proc/asound, dkms and lsinitrd
+if [ "$USE_SUDO" = 1 ]; then
+  sudo -n true 2>/dev/null || { SUDO_OK=0; }
+  if [ "$SUDO_OK" = 0 ]; then
+    printf '\n  [warn] no passwordless sudo; root-only checks will be skipped\n'
+    printf '  ->     re-run with a tty, or use --no-sudo deliberately\n'
+  fi
+fi
+
+#--------------------------------------------------------------- hardware
+sec "Hardware"
+MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+case "$MODEL" in
+  *iMac*19,1*|*A2115*) ok "iMac 19,1 / A2115 ($MODEL)" ;;
+  "")                 warn "could not read product_name (needs root?)" ;;
+  *)                  warn "unexpected model: $MODEL - this repo targets iMac19,1" ;;
+esac
+
+if [ -r /sys/class/dmi/id/board_version ] 2>/dev/null; then
+  info "board: $(cat /sys/class/dmi/id/board_version 2>/dev/null)"
+fi
+
+GPU=$(lspci 2>/dev/null | grep -iE 'vga|display controller' | head -1)
+if [ -n "$GPU" ]; then
+  info "gpu: ${GPU#*: }"
+  echo "$GPU" | grep -qiE 'AMD|ATI|Radeon|Ellesmere|polaris' \
+    && ok "AMD polaris-class GPU present" \
+    || warn "GPU is not an AMD Radeon - the 5K patches target amdgpu"
+else
+  warn "no display controller found via lspci"
+fi
+
+#----------------------------------------------------------------- kernel
+sec "Kernel"
+K=$(uname -r)
+if [ "$K" = "$REF_KERNEL" ]; then ok "$K (reference kernel)"
+else warn "$K - verified on $REF_KERNEL only; see docs/distro-matrix.md"; fi
+
+#--------------------------------------------------------------- display
+sec "Display - the 5K path"
+AMDSRC=$(cat /sys/module/amdgpu/srcversion 2>/dev/null)
+if [ -z "$AMDSRC" ]; then
+  no "amdgpu is not loaded"
+  info "a black display here is expected; see docs/recovery.md"
+elif [ "$AMDSRC" = "$REF_PATCHED_SRCV" ]; then
+  ok "patched amdgpu is running ($AMDSRC)"
+elif [ "$AMDSRC" = "$REF_STOCK_SRCV" ]; then
+  no "STOCK amdgpu is running ($AMDSRC) - the 5K patch is missing"
+  info "the patched driver lives only inside initrd-stackC"
+  info "see docs/recovery.md#recovery-2"
+else
+  warn "amdgpu srcversion $AMDSRC matches neither the reference patched nor stock build"
+fi
+
+# the on-disk copy is ALWAYS stock on this machine; do not call it a verdict
+DISK=$(modinfo -F filename amdgpu 2>/dev/null)
+[ -n "$DISK" ] && info "on-disk copy (expected to be stock): ${DISK##*/}"
+
+TS=$(cat /sys/module/amdgpu/parameters/tiled_stitch 2>/dev/null)
+if [ -z "$TS" ]; then
+  no "no tiled_stitch parameter - this driver has no 5K support"
+elif [ "$TS" = "$REF_STITCH" ]; then
+  ok "tiled_stitch=$TS (cmdline and sysfs agree)"
+else
+  no "tiled_stitch=$TS, expected $REF_STITCH"
+  info "the value is set on the kernel command line and needs a reboot"
+fi
+
+CMDLINE=$(grep -o 'amdgpu\.tiled_stitch=[^ ]*' /proc/cmdline 2>/dev/null)
+case "$CMDLINE" in
+  "amdgpu.tiled_stitch=-1") ok "cmdline carries tiled_stitch=-1" ;;
+  "")  no "no tiled_stitch on the kernel command line" ;;
+  *)   warn "cmdline has $CMDLINE; -1 is the verified value" ;;
+esac
+
+# connectors
+NC=0
+for f in /sys/class/drm/card*/status; do
+  [ "$(cat "$f" 2>/dev/null)" = "connected" ] && NC=$((NC+1))
+done
+if [ "$NC" -ge 2 ]; then ok "$NC connectors connected (both panels)"
+elif [ "$NC" -eq 1 ]; then warn "only $NC connector connected - one panel is dark"
+else no "no connectors connected"; fi
+
+# framebuffer size, from the connector modes
+# A connector's modes file holds one WxH per line, optionally tab-separated and
+# optionally carrying a _60.000 refresh suffix. Strip both before splitting.
+# (An earlier version used `set -- $line` and required two fields, which a bare
+# "5120x2880" never satisfies - it silently reported 0x0 for every machine,
+# including a correctly tiled one.)
+MAXW=0; MAXH=0
+for m in /sys/class/drm/card*/modes; do
+  [ -r "$m" ] || continue
+  while read -r line; do
+    line=${line%%$'\t'*}; line=${line%% *}
+    case "$line" in *x*) ;; *) continue ;; esac
+    geom=${line%%_*}
+    w=${geom%%x*}; h=${geom##*x}
+    case "${w}${h}" in *[!0-9]*) continue ;; esac
+    [ -n "$w" ] && [ -n "$h" ] || continue
+    if [ "$h" -gt "$MAXH" ] || { [ "$h" -eq "$MAXH" ] && [ "$w" -gt "$MAXW" ]; }; then
+      MAXW=$w; MAXH=$h
+    fi
+  done < "$m"
+done
+if [ "$MAXW" -ge 5000 ] 2>/dev/null; then ok "framebuffer reports ${MAXW}x${MAXH}"
+elif [ "$MAXW" -gt 0 ] 2>/dev/null; then warn "largest mode is ${MAXW}x${MAXH} - tiling is not joined"
+else unk "could not read connector modes"; fi
+
+# Plymouth is deliberately omitted from the initramfs - not a fault
+if S lsinitrd /boot/efi/opensuse-slowroll/*/initrd-stackC 2>/dev/null | grep -qi plymouth; then
+  ok "initramfs carries Plymouth"
+else
+  unk "Plymouth absent from initramfs (expected - built with --omit plymouth)"
+fi
+
+#----------------------------------------------------------------- audio
+sec "Audio - the codec path"
+DK=$(dkms status 2>/dev/null | grep -i macbookpro)
+if [ -n "$DK" ]; then
+  ok "DKMS codec registered"
+  echo "$DK" | sed 's/^/         /'
+  if echo "$DK" | grep -q ", $K,"; then
+    ok "a build exists for the running kernel"
+  else
+    warn "no DKMS build listed for $K - internal speakers may be silent"
+    info "sudo dkms install --force snd-hda-macbookpro/0.1 -k $K"
+  fi
+else
+  no "no DKMS codec registered - internal speakers will be silent"
+  info "see docs/fixes.md for the driver source and build guards"
+fi
+
+CSRC=$(cat /sys/module/snd_hda_codec_cs8409/srcversion 2>/dev/null)
+if [ -n "$CSRC" ]; then
+  CMOD=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
+  case "$CMOD" in
+    */updates/*) ok "cs8409 codec active from updates/ ($CSRC)" ;;
+    "")          info "cs8409 loaded (path not resolvable without root)" ;;
+    *)           warn "cs8409 resolves to $CMOD, not an updates/ build" ;;
+  esac
+else
+  warn "snd_hda_codec_cs8409 not loaded"
+fi
+
+# internal speaker enumeration: 2ch works, 4ch is the broken one
+if [ -r /proc/asound/card1/pcm0c/sub0/status ] 2>/dev/null; then
+  ok "capture path open on the internal codec"
+else
+  info "capture path not readable without root"
+fi
+
+#------------------------------------------------------------------ iGPU
+sec "iGPU"
+GB=$(cat /etc/modprobe.d/99-imac-audio-gpu-bind.conf 2>/dev/null)
+case "$GB" in
+  *gpu_bind=0*) ok "gpu_bind=0 set - iGPU will not steal HDA audio" ;;
+  "")           warn "no gpu_bind=0 in modprobe.d - enabling the iGPU risks the speakers" ;;
+  *)            warn "gpu_bind setting present but not the expected 0: $GB" ;;
+esac
+if lspci 2>/dev/null | grep -qi 'vga.*Intel'; then
+  warn "an Intel display controller is bound - check the speakers"
+else
+  ok "no Intel display controller bound"
+fi
+
+#--------------------------------------------------- never-verified items
+sec "Not verified - reported as UNKNOWN, never as OK"
+# These have no verified answer on the reference machine. Saying OK would be a
+# lie. See docs/reference-system.md.
+unk "P3 wide gamut / ICC colour profile - never applied, never measured"
+unk "display tearing - never measured"
+unk "cold-boot panel initialisation - known FAULTY (AUX-wake retries); untested this boot"
+unk "Bluetooth pairing - chip does not bond; needs a USB dongle"
+info "these are open questions, not failures. Do not read them as passing."
+
+#------------------------------------------------------------- bootloader
+sec "Boot"
+BLS=/boot/efi/loader/entries
+if [ -d "$BLS" ]; then
+  ok "systemd-boot BLS entries present"
+  S ls -1 "$BLS" 2>/dev/null | sed 's/^/         /' || info "entries not readable without root"
+else
+  unk "no $BLS - is this an ESP-mounted system?"
+fi
+AVAIL=$(df -m --output=avail /boot/efi 2>/dev/null | tail -1 | tr -d ' ')
+if [ -n "$AVAIL" ]; then
+  if   [ "$AVAIL" -ge 120 ]; then ok "ESP has ${AVAIL}M free"
+  elif [ "$AVAIL" -ge 45 ];  then warn "ESP has ${AVAIL}M free - below the 120M a kernel update wants"
+  else no "ESP has only ${AVAIL}M free - below the 45M an ordinary update needs"
+       info "imac-update will refuse; prune old BLS entries first"
+  fi
+fi
+
+#------------------------------------------------------------------ result
+sec "Result"
+printf '  passed %d   failed %d   warnings %d   unknown %d\n\n' "$PASS" "$FAIL" "$WARN" "$UNK"
+if [ "$FAIL" -gt 0 ]; then
+  echo "  FAIL - something is not working. See the [FAIL] lines above."
+  echo "  If the display is broken, read docs/recovery.md before changing anything."
+  exit 1
+fi
+echo "  PASS - every checkable component is working."
+echo "  UNKNOWN lines are untested questions, not failures."
+echo "  Paste all of this when reporting an issue."

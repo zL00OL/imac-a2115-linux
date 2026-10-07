@@ -152,6 +152,7 @@ before changing anything.
 | `docs/distro-matrix.md` | what applies on which distro |
 | `docs/troubleshooting.md` | failure modes that cost time |
 | `docs/igpu-and-colour.md` | hidden Intel iGPU and P3 wide-gamut — **not yet audited** |
+| `scripts/imac-verify` | **one command that says whether this machine works** — read-only; paste its output when reporting an issue |
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
 | `scripts/check-igpu.sh` | read-only iGPU + P3 colour audit |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
