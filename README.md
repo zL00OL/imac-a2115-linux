@@ -1,7 +1,6 @@
 # iMac 5K (A2115) — seamless tiled 5K on Linux
 
 **Goal: one seamless 5120x2880 desktop across both panels, no seam**
-Everything else in this repo is secondary.
 
 ## Reference system
 
