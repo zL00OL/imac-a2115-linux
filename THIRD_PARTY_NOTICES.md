@@ -54,18 +54,20 @@ opposite and was wrong.
 
 ### A note on "Stack C"
 
-The `Stack C` naming used in earlier notes on this machine came from the
-universal-patcher lineage above. On this hardware it was ultimately **not
-needed as originally documented**: an earlier revision of this file claimed the
-stock driver plus `amdgpu.tiled_stitch` was sufficient. That was wrong, and
-`docs/hardware.md` records the measurement that disproves it. The stock driver
-has no `tiled_stitch` parameter at all. The patched driver, built from
-`patches/amdgpu-5k/` and loaded from `initrd-stackC`, is what produces the
-seamless 5K desktop here.
+The `Stack C` naming comes from the universal-patcher lineage above. It refers to
+the **initramfs** on this machine, `initrd-stackC`, and it is the patched driver
+inside it that produces the seamless desktop.
 
-Anyone reproducing this on a **different** iMac generation should check those
-repos first — some models genuinely do need patched display drivers. This
-document describes **A2115 only**.
+Two earlier revisions of this project got that wrong in opposite directions —
+first claiming a `Stack C` *module* was needed, then claiming the driver was
+stock and only a kernel parameter was needed. Both were wrong: stock `amdgpu` has
+no `tiled_stitch` parameter at all, so neither a stock driver nor a
+parameter-only configuration can produce tiled 5K here. `docs/hardware.md`
+records the measurement.
+
+Anyone reproducing this on a **different** iMac generation should check the repos
+above first — several cover far more models than this document does, which
+describes **A2115 only**.
 
 ---
 
@@ -79,7 +81,7 @@ The following projects do the actual work.
 | Project | Role |
 |---|---|
 | [Linux kernel](https://kernel.org) — `drivers/gpu/drm/amd` | The `amdgpu` driver. Provides `amdgpu.tiled_stitch`, the parameter that makes seamless 5K work. GPL-2.0. |
-| [Mesa](https://www.mesa3d.org/) | `radeonsi` — the OpenGL driver that drives the tiled output. exposed to Resolve. MIT. |
+| [Mesa](https://www.mesa3d.org/) | `radeonsi` — the OpenGL driver that drives the tiled output. MIT. |
 | [systemd](https://systemd.io/) | `systemd-boot` / BLS kernel entries. |
 | [dracut](https://github.com/dracutdevs/dracut) | Generates the initramfs referenced by the boot entries. |
 | [edid-decode](https://git.linuxtv.org/edid-decode.git) | Decodes the panel EDIDs when diagnosing the seam. |
@@ -88,7 +90,7 @@ The following projects do the actual work.
 
 | Project | Role |
 |---|---|
-| [PipeWire](https://pipewire.org/) / [WirePlumber](https://pipewire.pages.freedesktop.org/wireplumber/) | The 83-node speaker filter chain in `~/.config/pipewire/pipewire.conf.d/`. MIT. |
+| [PipeWire](https://pipewire.org/) / [WirePlumber](https://pipewire.pages.freedesktop.org/wireplumber/) | The audio server and session manager carrying the internal-speaker path. MIT. |
 | `snd_hda_macbookpro` / `cs8409` | Cirrus Logic codec driver; the subject of the local audio patch. |
 
 ### Desktop
