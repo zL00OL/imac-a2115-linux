@@ -3,14 +3,48 @@
 **Goal: one seamless 5120x2880 desktop across both panels, no seam**
 Everything else in this repo is secondary.
 
-Hardware: iMac 19,1 / A2115, Radeon RX 580 (`polaris10`), Intel i5-8500.
-Tested on openSUSE **Slowroll**, kernel 7.2.2, Mesa 26.2.2.
+## Reference system
 
-**Portability: not established.** Everything here is verified on **one machine**
-on one distro. The 5K patches are upstream-verified for the **7.1.x–7.2.x** amdgpu
-series only; on a 7.3+ kernel the patch will not apply and must be re-ported by a
-human. Do not read the section headings below as "this works on any distro" —
-the sibling `docs/distro-matrix.md` used to claim that and it was wrong.
+Every claim in this repository was verified on exactly this configuration.
+Anything not verified on it is labelled EXPERIMENTAL, BROKEN, SUPERSEDED or
+UNTESTED in the page that discusses it.
+
+| | |
+|---|---|
+| **Machine** | iMac 19,1 / A2115 (27-inch, 2019) — **VERIFIED** |
+| **CPU** | Intel Core i5-8500 — **VERIFIED** |
+| **GPU** | AMD Ellesmere (`polaris10`), 4 GiB — see note below |
+| **Distro** | openSUSE Slowroll — **VERIFIED** |
+| **Kernel** | 7.2.2-1-default — **VERIFIED** |
+| **Mesa** | 26.2.2 — **VERIFIED** |
+| **Desktop** | KDE Plasma on Wayland — **VERIFIED** |
+| **Display** | 5120×2880 seamless, `amdgpu.tiled_stitch=-1` — **VERIFIED** |
+| **Audio codec** | DKMS `snd-hda-macbookpro/0.1` — **VERIFIED** |
+| **Internal speakers** | 2-channel `analog-stereo` — **VERIFIED** |
+
+**GPU marketing name, deliberately not asserted.** This repository only ever
+recorded the ASIC: "Radeon RX 580 (`polaris10`)" in this file, and
+"Radeon RX 470-580 family (`polaris10`)" in `docs/hardware.md`. Those are chip
+*family* descriptions, not the card's actual model name, and they are therefore
+not precise enough to serve as a reference line.
+
+The iMac19,1 27-inch shipped with a Radeon Pro 570X, which is the expected
+answer — but "expected" is not "verified", so this table says Ellesmere and
+leaves the name open rather than guessing. Settle it from the PCI ID:
+
+```bash
+lspci -nnk | grep -A3 -iE 'vga|display'
+```
+
+**Full machine details** — firmware, Mesa build, KDE version, initramfs
+generator, kernel command line, patch commit and hashes, `dkms` version — are in
+`docs/reference-system.md`.
+
+**Portability is not established.** One machine, one distro. The 5K patches are
+upstream-verified for the **7.1.x–7.2.x** amdgpu series only; on a 7.3+ kernel
+they will not apply and must be re-ported by a human. See
+`docs/distro-matrix.md` for what applies where.
+
 
 > [!IMPORTANT]
 > **The 5K panel needs a patched `amdgpu`, and it is not stock.** This was
