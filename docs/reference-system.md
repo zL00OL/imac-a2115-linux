@@ -127,7 +127,7 @@ which would force a full kernel rebuild.
 |---|---|
 | Intel HD 630 present in firmware | **VERIFIED** (`CPUID.06H` display family/model `2`) |
 | Visible on PCI | **BROKEN** — absent at `00:02.0`, hidden by Apple firmware |
-| `gpu_bind` | `0`, via `/etc/modprobe.d/99-imac-audio-gpu-bind.conf` |
+| `gpu_bind` | `0`, via `/etc/modprobe.d/99-imac-audio-gpu-bind.conf` — **currently a no-op**, since the iGPU is not enumerated for it to gate |
 
 The iGPU is never enabled. It shares the HDA controller, so binding it can take
 the internal speakers with it.
@@ -185,6 +185,7 @@ Stated plainly so these are never mistaken for working features:
 
 ## Related
 
+- `docs/igpu-and-quicksync.md` — the hidden iGPU and hardware encoding
 - `README.md` — the reference table in brief
 - `docs/tiled-5k.md` — tiling diagnostics
 - `docs/kernel-updates.md` — building the patched initramfs for a new kernel

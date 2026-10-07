@@ -147,7 +147,8 @@ before changing anything.
 | `LICENSE` | MIT — covers **this repository's own scripts and documentation only** |
 | `THIRD_PARTY_NOTICES.md` | upstream credits, and the terms the vendored patches keep |
 | `docs/hardware.md` | machine facts, and which `amdgpu` actually loads |
-| `docs/audio.md` | everything else that was fixed (secondary) |
+| `docs/audio.md` | the CS8409 codec and the internal speakers |
+| `docs/igpu-and-quicksync.md` | **the hidden Intel iGPU** and hardware encoding — why it is invisible, and the documented-but-unapplied fix |
 | `docs/distro-matrix.md` | what applies on which distro |
 | `docs/troubleshooting.md` | failure modes that cost time |
 | `scripts/imac-verify` | **one command that says whether this machine works** — read-only; paste its output when reporting an issue |

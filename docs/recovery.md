@@ -299,7 +299,7 @@ in this repository.
 | CS8409 audio driver | DKMS, `snd-hda-macbookpro/0.1` → `updates/` | not in-tree |
 | Internal speakers | 2-channel `analog-stereo` | the 4-channel `analog-surround-40` enumeration is the broken one |
 | Plymouth | omitted from `initrd-stackC` | installed as packages, but stripped from that image |
-| iGPU | hidden by Apple firmware, gated by `gpu_bind=0` | enabling it can steal HDA audio |
+| iGPU | hidden by Apple firmware (see `docs/igpu-and-quicksync.md`) | enabling it can steal HDA audio **and** changes the DRM topology the 5K tiling depends on |
 
 **Never** treat `/lib/modules/.../amdgpu.ko.zst` as the driver you are running.
 It is not. `/sys/module/amdgpu/srcversion` is the truth.
