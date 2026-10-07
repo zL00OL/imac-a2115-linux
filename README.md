@@ -1,7 +1,6 @@
 # iMac 5K (A2115) — seamless tiled 5K on Linux
 
 **Goal: one seamless 5120x2880 desktop across both panels, no seam**
-Everything else in this repo is secondary.
 
 ## Reference system
 
@@ -10,7 +9,7 @@ Anything not verified on it is labelled EXPERIMENTAL, BROKEN, SUPERSEDED or
 UNTESTED in the page that discusses it.
 
 | | |
-|---|---|
+| --- | --- |
 | **Machine** | iMac 19,1 / A2115 (27-inch, 2019) — **VERIFIED** |
 | **CPU** | Intel Core i5-8500 — **VERIFIED** |
 | **GPU** | AMD Ellesmere (`polaris10`), 4 GiB — see note below |
