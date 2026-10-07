@@ -140,6 +140,7 @@ before changing anything.
 
 | Path | |
 |---|---|
+| `docs/reference-system.md` | the machine every claim was verified on — full hardware, kernel, patch and DKMS identity |
 | `docs/recovery.md` | **read this before changing anything** — how to get back from a black screen, a lost initramfs, or an unbound device |
 | `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
 | `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
