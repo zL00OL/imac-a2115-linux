@@ -397,6 +397,32 @@ combination does not tile, so it is not a useful trade.
 `module_blacklist=`). Neither changes the outcome. If Plymouth is enabled and
 you want the boot seconds back, remove `rd.plymouth=1` from the entry.
 
+## A rebuilt entry can silently drop the brightness parameter
+
+Brightness depends on `acpi_backlight=video` on the kernel command line. It is
+not a module, not a udev rule and not in `/etc/default/grub` — this machine has
+no such file. It lives only in the hand-maintained BLS entries:
+
+```
+/boot/efi-xbootldr/loader/entries/5k-727.conf
+/boot/efi-xbootldr/loader/entries/5k-722.conf
+```
+
+So anything that regenerates entries — `kernel-install`, a copied entry, a
+distribution upgrade — can drop it, and the symptom is only that the screen is
+stuck at one brightness with no slider. The display is otherwise perfect, which
+makes it easy to dismiss as a hardware fault.
+
+If brightness stops working after an update, check the parameter before
+anything else:
+
+```bash
+tr ' ' '\n' < /proc/cmdline | grep backlight
+ls /sys/class/backlight/          # expect acpi_video0, not amdgpu_bl*
+```
+
+There is no `grub2-mkconfig` involvement and no `/etc/default/grub` to edit.
+
 ## A keep-awake inhibitor can silently block rebooting
 
 This one presents as "reboot does nothing", which is very hard to connect to
@@ -434,7 +460,7 @@ running, because the unit's failure is easy to miss in the output. Check
 - `docs/kernel-updates.md` — building a patched initramfs for a new kernel
 - `docs/tiled-5k.md` — tiling diagnostics and the three failure modes
 - `docs/troubleshooting.md` — display problems that are not emergencies
-- `docs/brightness.md` — the panel brightness control path, and why it is blocked
+- `docs/brightness.md` — panel brightness, and the `acpi_backlight=video` fix
 - `docs/audio.md` — the CS8409 codec, headset capture, and `dmesg` permissions
 - `patches/amdgpu-5k/README.md` — patch provenance and apply order
 - `scripts/check-5k.sh` — read-only diagnostic; safe to run at any time

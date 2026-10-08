@@ -1,179 +1,224 @@
-# Brightness: what actually controls the panel, and why it does not work yet
+# Brightness
 
-> **Status: UNRESOLVED.** The correct control path is identified and an ACPI
-> table override that extends it has been built and verified, but it is not
-> loaded. Every route that does not require a kernel change is exhausted.
-> This page exists so the next attempt starts from the diagnosis rather than
-> from `amdgpu_bl*`.
+> **Status: SOLVED.** Add `acpi_backlight=video` to the kernel command line and
+> reboot. The panel responds across its full range and the KDE slider works
+> again. No DSDT override, no kernel patch, no AML.
 
-Nothing here is a configuration mistake. Do not spend time on mixer levels,
-`acpi_backlight` variants that have already been tried, or the amdgpu sysfs
-node — each is documented below with the evidence that closed it.
+This page records what the actual fault was, because the symptom is identical
+to several dead ends below and the wrong ones look convincing.
 
-## Contents
+## The fix
 
-| Section | |
-|---|---|
-| [The panel has one real control](#the-panel-has-one-real-control) | `ABCM`, and why sysfs cannot reach it |
-| [The amdgpu backlight node is a no-op](#the-amdgpu-backlight-node-is-a-no-op) | writes are accepted and ignored |
-| [The ACPI table override that would fix it](#the-acpi-table-override-that-would-fix-it) | built and verified, not loaded |
-| [Why the override is not loaded](#why-the-override-is-not-loaded) | DSDT vs SSDT |
-| [Dead ends](#dead-ends) | `acpi_call`, libacpi, `acpiexec` |
-| [What has not been tested](#what-has-not-been-tested) | the honest gaps |
-
-## The panel has one real control
-
-The internal panel is driven by the firmware's own ACPI brightness method. On
-this machine (iMac19,1, firmware revision `0x00150001`) the chain is:
+Both boot entries carry it. On this machine there is no `/etc/default/grub`;
+the entries are hand-maintained BLS files, which is why the parameter must be
+edited in both places:
 
 ```
-\_SB.PCI0.PEG0.GFX0          Device (GFX0)
-    Method (ABCM, 1)         set brightness, takes a level 0..90
-    Method (ABCL, 0)         Return (Package) — the level table
-    Method (BSET, 1)         scale 655 * level onto the controller 0..0xFFFF
-\_SB.PCI0.PEG0.GFX0.LCD      Device (LCD)
-    Method (_BCL, 0)         Return (ABCL ())
-    Method (_BCM, 1)         ABCM (Arg0)
-    Method (_BQC, 0)         Return (BRTL)
+/boot/efi-xbootldr/loader/entries/5k-727.conf
+/boot/efi-xbootldr/loader/entries/5k-722.conf
+
+options root=UUID=… rootflags=subvol=@/.snapshots/1/snapshot \
+        amdgpu.tiled_stitch=-1 acpi_backlight=video
 ```
 
-`ABCL` returns 92 entries: a two-byte header (`0x50`, `0x32`), then levels
-`1..90` (`One`, `0x02` … `0x5A`). Because `BSET` scales by `655 * level`, the
-firmware's own maximum of 90 reaches `58950` of `65535` — about **90% of what
-macOS can drive**. Apple caps the table below the panel's real range.
+## What was actually wrong
 
-There are two `GFX0` devices (one per GPU); both copies of `ABCL` must be
-edited together.
+Two faults were tangled together, and the second was invisible until the first
+was worked around.
 
-## The amdgpu backlight node is a no-op
-
-A DRM backlight is registered and accepts writes:
+**1. The only backlight node was a `raw` one that the panel ignores.**
 
 ```
 /sys/class/backlight/amdgpu_bl2   current=65535 max=65535 type=raw
-$ echo 30000 > /sys/class/backlight/amdgpu_bl2/brightness
-$ cat /sys/class/backlight/amdgpu_bl2/brightness
-30000
+$ echo 30000 > …/amdgpu_bl2/brightness
+$ cat …/amdgpu_bl2/brightness
+30000            # accepted, and the panel did not change
 ```
 
-The value sticks and **the panel does not change**. This node is amdgpu's DP
-auxiliary backlight, which is not what this panel is wired to. The KDE slider
-and the `imac-brightness` helper both drive this node, which is why neither
-appears to do anything.
+This is amdgpu's DP-aux backlight, not what this panel is wired to. Writes
+succeed because the kernel never checks whether anything is on the other end.
 
-Also absent: any `acpi_video*` backlight, and any UPower-visible backlight
-device.
+**2. The desktop had nothing to drive.**
 
-## The ACPI table override that would fix it
+`acpi_backlight` defaults to `native` here, and that was in the command line
+already. In `native` mode amdgpu registers its own backlight and the kernel
+**never creates the ACPI one**. PowerDevil enumerates `/sys/class/backlight`
+but only acts on nodes of type `firmware` or `platform` — `raw` is skipped. So
+the slider had exactly one candidate and rejected it.
 
-Extending `ABCL` from levels 1..90 to 1..100 plus 101 removes the firmware cap
-and makes `_BCL` return a table the kernel's ACPI video driver will accept. An
-override table has been built and verified on the reference machine.
-
-It rewrites both `ABCL` methods and bumps the OEM revision so the kernel
-prefers it:
+This was previously misdiagnosed as a UPower regression. It is not:
 
 ```
-before:  ABCL count=0x5C (92)   entries: 92   first: [0x50, 0x32, One, 0x02 …]  last: … 0x5A
-after:   ABCL count=0x67 (103)  entries: 103  first: [0x64, 0x32, One, 0x02 …]  last: … 0x65
+$ upower -e
+/org/freedesktop/UPower/devices/ups_hiddev1
+/org/freedesktop/UPower/devices/DisplayDevice
+```
+
+UPower exposes no backlight device in either mode. PowerDevil reads sysfs
+itself; the `raw` type was the whole problem.
+
+With `acpi_backlight=video` the kernel registers the firmware driver instead
+and stands amdgpu down:
+
+```
+amdgpu 0000:01:00.0: [drm] Skipping amdgpu DM backlight registration
+
+/sys/class/backlight/acpi_video0   89/89    type=firmware   <- the 5K panel
+/sys/class/backlight/acpi_video1   100/100  type=firmware   <- the IGPU, no panel
+```
+
+`acpi_video0` is `GFX0`, the dGPU that drives the panel. Its 89 steps are the
+firmware's own level table (below). `acpi_video1` is the iGPU and has nothing
+attached — ignore it.
+
+Verified working across the whole range, and by eye:
+
+```
+$ for v in 0 22 45 67 89; do echo $v > /sys/class/backlight/acpi_video0/brightness; \
+      printf "%s -> %s\n" $v "$(cat /sys/class/backlight/acpi_video0/brightness)"; done
+0 -> 0
+22 -> 22
+45 -> 45
+67 -> 67
+89 -> 89
+```
+
+## The firmware's brightness path
+
+The panel is driven by ACPI. On this machine (iMac19,1, firmware revision
+`0x00150001`) the real paths, printed from the machine's own DSDT, are:
+
+```
+\_SB.PCI0.PEG0.EGP0.EGP1.GFX0    Device (GFX0)   -- dGPU, the 5K panel
+    Method (ABCM, 1)             set brightness, takes a level 0..90
+    Method (ABCL, 0)             Return (Package) — the level table
+    Method (BSET, 1)             scale 655 * level onto the controller
+\_SB.PCI0.PEG0.EGP0.EGP1.GFX0.LCD  Device (LCD)
+    Method (_BCL, 0)             Return (ABCL ())
+    Method (_BCM, 1)             ABCM (Arg0)
+    Method (_BQC, 0)             Return (BRTL)
+
+\_SB.PCI0.PEG0.GFX0               Device (GFX0)   -- second instance, one per GPU
+    ... same ABCM/ABCL, and an LCD child with the same three methods
+```
+
+`ABCL` returns 92 entries: a two-byte header (`0x50`, `0x32`), then levels
+`1..90`. Because `BSET` scales by `655 * level`, the firmware's maximum of 90
+reaches `58950` of `65535` — about **90% of what macOS can drive**. Apple caps
+the table below the panel's real range, which is why `acpi_video0` reports
+`max_brightness=89` and why the slider does not quite reach the top end. This
+is a firmware cap, not a driver limit, and it is not worth chasing.
+
+`BRTL` — returned by `_BQC` — is an *external reference* to a field unit rather
+than a plain integer. `_BCL` and `_BCM` are the integers that matter.
+
+### One thing left unexplained
+
+`_BCL`/`_BCM`/`_BQC` sit on the `LCD` **child** of `GFX0`, while `GFX0` itself
+carries only `ABCM`/`ABCL`. The ACPI video driver looks for brightness methods
+on the *video device*, so on the face of it it should not have found them — yet
+`acpi_video0` registered with exactly the 89 levels from that table, so it did
+find them.
+
+Whether it reads a `_BCL` on `GFX0` that the brace-tracking above missed, or
+walks to the `LCD` child, was not established. It does not affect the fix, and
+the ASL route to forcing the question is closed anyway — see below.
+
+## The AML route is closed, and it is worth knowing why
+
+The obvious plan was an SSDT that **adds** delegating methods to `GFX0`, since
+`GFX0` has no `_BCL` of its own, so nothing would be redefined and the kernel
+would accept the table. It cannot be written:
+
+```
+$ iasl -p bright bright.dsl
+Error 6105 - Invalid object type for reserved name
+```
+
+**`_BCL`, `_BCM` and `_BQC` are ACPI reserved names.** ASL will not define
+them, so no supplementary table can add them. That is almost certainly why
+several 5K projects rename these methods in their patches instead of wrapping
+them.
+
+Two related dead ends, for anyone repeating this:
+
+- ACPICA does not resolve paths across `DefinitionBlock`s. Compiling the table
+  together with the machine's decompiled DSDT gives `Error 6161`
+  (`One or more objects within the Pathname do not exist`) and then `Error
+  6164`. `External` declarations do fix the resolution, and then `Error 6105`
+  closes it regardless of where the `External` lines are placed.
+- Do not infer scope paths from indentation when reading a decompiled DSDT. A
+  first attempt produced `\_SB._SB.EGP0.EGP1.GFX0`, which does not exist; the
+  real path is `\_SB.PCI0.PEG0.EGP0.EGP1.GFX0`.
+
+## The DSDT override: built, never needed
+
+An override extending `ABCL` from levels `1..90` to `1..100` plus 101 (bumping
+the OEM revision so the kernel would prefer it) was built and verified:
+
+```
+before:  ABCL count=0x5C (92)   entries: 92   first: [0x50, 0x32, One, 0x02 …]
+after:   ABCL count=0x67 (103)  entries: 103  first: [0x64, 0x32, One, 0x02 …]
          OEM Revision 0x00150001 -> 0x00150002
 ```
 
-`0x65` is 101, which is the controller's true maximum: `BSET` is `655 * level`
-up to level 100 and clamps anything above, so 101 is the value macOS reaches.
-Level 100 is kept in the list as well — the table's AC default is 100, and
-`acpi_video` treats a `_BCL` whose defaults are missing from the level list as
-buggy and shifts every entry.
+It is **not loaded**, and no longer needs to be. It was placed in the initramfs
+at the root named for the table signature (`lsinitrd` shows `-rw-r--r-- 1 root
+root 30231 DSDT`) with `CONFIG_ACPI_TABLE_UPGRADE=y`, yet the live table still
+reports revision `0x00150001`. The expected cause is DSDT-vs-SSDT:
+`acpi_table_upgrade()` reads SSDTs out of the initramfs, while the DSDT is
+consumed from firmware before the initramfs exists. This machine keeps its
+brightness table in the DSDT; the iMac18,3 project this follows overrides an
+SSDT instead.
 
-Built size is 30,231 bytes. The rewrite works against the **DSDT** on this
-machine, unlike the iMac18,3 project whose table lives in an SSDT — see below.
-
-### What it does not fix by itself
-
-Even if loaded, the override only extends the *range*. Whether an
-`acpi_video0` backlight device appears at all depends on the ACPI video driver
-finding brightness methods on the video device. Here `_BCL` is on the **`LCD`
-child** of `GFX0`, not on `GFX0` itself. That has not been proven to be the
-reason no backlight is registered, and it is the first thing to check if the
-override ever loads.
-
-## Why the override is not loaded
-
-The file is placed in the initramfs at the root, named for the table
-signature, which is the documented mechanism:
-
-```
-$ lsinitrd …/initrd-stackC | grep -E '(^|[[:space:]])DSDT$'
--rw-r--r-- 1 root root 30231 DSDT
-```
-
-And the kernel is built for it:
-
-```
-$ zcat /proc/config.gz | grep CONFIG_ACPI_TABLE_UPGRADE
-CONFIG_ACPI_TABLE_UPGRADE=y
-```
-
-Yet the live table is unchanged:
-
-```
-$ python3 -c "print(hex(int.from_bytes(open('/sys/firmware/acpi/tables/DSDT','rb').read()[0x18:0x1c],'little')))"
-0x00150001        # override was 0x00150002
-```
-
-The expected cause is **DSDT vs SSDT**. `acpi_table_upgrade()` reads SSDTs out
-of the initramfs successfully; the DSDT is consumed directly from firmware
-before the initramfs is available. This machine keeps its brightness table in
-the DSDT, and the iMac18,3 project — whose method this follows — overrides an
-SSDT, which is a different situation.
-
-**Caveat, stated plainly:** the claim that the kernel "did not even try" rests
-on a `dmesg` read taken as a normal user, which returns nothing at all. The
-table being unchanged was verified; the reason was not. Read the next section
-before assuming this is settled.
+If someone does want the extra 10% of range, that is the table to fight over.
+It is a range question only — it was never the reason brightness did not work.
 
 ## Dead ends
 
 | Route | Why it does not work |
 |---|---|
 | `amdgpu_bl2` / `amdgpu_bl1` sysfs | Writes accepted, panel unchanged (measured) |
-| ACPI table override | Built and correct; DSDT replacement not applied by the kernel |
+| Driving `amdgpu_bl` from a script | Same node. Selection order, not permissions, was the bug |
+| `acpi_backlight=native` | The default, and the reason nothing worked. It registers amdgpu's `raw` node |
+| `acpi_backlight=firmware` | Never tried. Superseded — `video` works |
+| SSDT adding `_BCL`/`_BCM` to `GFX0` | **Impossible.** Reserved names, `Error 6105` |
+| Compiling an override against the live DSDT | `Error 6161`/`6164` — ACPICA does not link across DefinitionBlocks |
+| DSDT override via `acpi_table_upgrade` | Built and correct; the kernel does not apply DSDT replacement |
 | `acpi_call` kernel module | **Removed from upstream Linux.** No `CONFIG_ACPI_CALL`, no Kconfig entry, no `acpi_call.c` in the 7.2.7 tree, not packaged |
-| libacpi (userspace AML) | `zypper search libacpi` → "No matching items found" on this distro |
+| libacpi (userspace AML) | `zypper search libacpi` → "No matching items found" |
 | `acpiexec` (ships with `acpica`) | Runs AML in userspace with its own namespace; cannot drive real hardware |
+| Blaming `video.ko` missing from the initramfs | **Disproved.** `video` is loaded (81920, used by `amdgpu` and `i915`) and registers `video0`/`video1` — it just could not create a backlight in `native` mode |
 | `rd.driver.blacklist=efi-framebuffer` | Not honoured for DRM drivers by dracut |
 | `modprobe.blacklist=efi-framebuffer` | **Wrong parameter name.** The kernel takes `module_blacklist=` |
 
-Note that `efi-framebuffer` is *not* in `modules.builtin`, yet it loads anyway,
-so the blacklist name is still unverified.
+`efi-framebuffer` is *not* in `modules.builtin`, yet it loads anyway, so that
+blacklist name is still unverified.
 
-An SSDT route remains plausible and untried: a `Scope()` block that **adds** a
-new method delegating to `LCD._BCL`/`_BCM` is legal AML, whereas overriding an
-existing method fails with `AE_ALREADY_EXISTS`. That would still need
-`acpi_configfs` (present as `acpi_configfs.ko.zst`) plus some way to *invoke*
-the method, which is the part with no available implementation.
+## Method notes
 
-## What has not been tested
+- **`dmesg` as a normal user returns nothing at all.** Any conclusion drawn
+  from an empty read is worthless — several were drawn that way before this was
+  noticed. Read it as root.
+- Both ACPI video devices report the same `v4l` name
+  (`FaceTime HD Camera (Built-in)`), so the name is no help for telling them
+  apart. Use `max_brightness`: 89 is the panel, 100 is the iGPU.
 
-This list is short because several plausible-sounding tests were skipped or
-performed invalidly. Do them before spending more time:
+## After the fix
 
-1. **`acpi_backlight=video` and `=firmware`.** Only `native` has been tried.
-   `video` uses the ACPI video driver's backlight registration — a different
-   code path from `native`. One-line cmdline change plus a reboot, and it is
-   the cheapest possible test. **Do this first.**
-2. **The real DSDT structure.** `_BCL` appeared to be nested under `LCD`
-   (lines 6069/6551 with `LCD` at 6062/6544), but the tree was never printed
-   properly. If `GFX0` has its own `_BCL`, the "driver can't find brightness"
-   theory collapses and something else is responsible.
-3. **Kernel messages during override load.** Never observed, for the reason
-   above. Run as root.
-4. **`CONFIG_ACPI_VIDEO=m`** — the ACPI video driver is a module. Confirm it is
-   present in the initramfs, since backlight registration happens at its load.
-5. **SSDT naming variants** for the override file. Only the literal name `DSDT`
-   has been tried.
+- Brightness persists across reboot via `systemd-backlight@`, which saves to
+  `/var/lib/systemd/backlight/pci-0000:01:00.0:backlight:acpi_video0`.
+- KDE's slider works on its own now. `/usr/local/bin/imac-brightness` is no
+  longer needed for that, but remains useful for an exact level, `min`/`max`,
+  and use without a desktop session. It drives `acpi_video0` and prints a
+  percentage.
+- Both helper scripts select the panel by preferring an `acpi_video*` node
+  whose `max_brightness` is not 100, and demote `amdgpu_bl*` to last resort.
+  That preference order is the actual fix; the scripts are incidental.
 
 ## Related
 
-- [`docs/troubleshooting.md`](troubleshooting.md)
+- [`docs/tiled-5k.md`](tiled-5k.md) — the panel's tiled mode, and the amdgpu
+  firmware load that makes Plymouth impossible
 - [`docs/recovery.md`](recovery.md)
+- [`docs/troubleshooting.md`](troubleshooting.md)
