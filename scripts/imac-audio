@@ -1,0 +1,482 @@
+#!/bin/bash
+# imac-audio - install and verify the CS8409 codec driver on iMac19,1.
+#
+# Replaces the older scripts/imac-audio-fix and scripts/imac-audio-module,
+# which were written around a conclusion that has since been disproved. See
+# "Why the old scripts were wrong" at the bottom.
+#
+#   imac-audio --check      verify what is loaded right now (default, read-only)
+#   imac-audio --install    build and install the patched driver via DKMS
+#   imac-audio --remove     remove the DKMS package
+#   imac-audio --mic        microphone diagnostics, ALSA versus PipeWire
+#   imac-audio --helpers    install/remove imac-mic-on, imac-brightness, sudoers
+#
+#   -k KVER     build for this kernel instead of every installed one
+#   --dry-run   show what would happen, change nothing
+#
+# THE ONE CHECK THAT MATTERS
+# ---------------------------
+# The patched driver exports 10 module parameters. An unpatched one exports 0.
+# That is a five-second, unambiguous test of whether the fix is loaded, and it
+# is the first thing to run when headset capture returns as digital silence:
+#
+#     ls /sys/module/snd_hda_codec_cs8409/parameters | wc -l
+#
+#     10  ->  patched, headset capture is wired up
+#     0   ->  you are running stock; --install
+#
+# The parameters added by the headset patch are headset_mike_boost,
+# headset_mike_gain, headset_buttons, button_debounce_ms,
+# button_long_press_ms, button_max_hold_ms, hp_hold_on_capture, intmike_gain,
+# int_drain_burst and int_drain_max.
+
+set -uo pipefail
+
+SRC_REPO=https://github.com/jackdanyell/imac18-3-cs8409-linux-audio
+SRC_PIN=be90113a7638eb264b2ff5acfe888cd72c8364c6
+# The headset capture fix. It was written against SRC_PIN exactly.
+PATCH_REPO=https://github.com/ahmadtv/omarchy-imac18-3
+PATCH_FILE=cs8409-headset-capture.patch
+
+SRC_DIR=/usr/src/snd_hda_macbookpro-0.2
+PKG=snd_hda_macbookpro
+VER=0.2
+# Expected parameters on a correctly patched module.
+WANT_PARAMS=10
+
+MODE=check
+TARGET=""
+DRY=0
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; }
+warn() { printf '  \033[33mwarn\033[0m  %s\n' "$*"; }
+hint() { printf '        -> %s\n' "$*"; }
+die()  { printf 'imac-audio: %s\n' "$*" >&2; exit 1; }
+
+need_root() {
+  [ "$(id -u)" -eq 0 ] || die "must run as root"
+}
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is required but not installed"
+}
+
+# --------------------------------------------------------------------- helpers
+
+param_count() {
+  ls /sys/module/snd_hda_codec_cs8409/parameters 2>/dev/null | wc -l
+}
+
+src_dir_of() {
+  if [ -d "$SRC_DIR" ]; then echo "$SRC_DIR"; else
+    local d
+    for d in /usr/src/snd_hda_macbookpro-*; do
+      [ -d "$d" ] && { echo "$d"; return; }
+    done
+    return 1
+  fi
+}
+
+# Does the source tree carry the headset capture code? Checks for the symbols
+# the patch introduces rather than looking for a patch file, because the patch
+# is applied INTO the headers that install.cirrus.driver.sh later copies into
+# the kernel tree - there is no single "patched" file to test.
+source_is_patched() {
+  local d=$1
+  grep -rql 'headset_mike_gain' "$d/patch_cirrus" 2>/dev/null && return 0
+  grep -ql 'headset_mike_gain' "$d/patch_cs8409.h.diff" 2>/dev/null && return 0
+  return 1
+}
+
+# ------------------------------------------------------------------ --check
+
+do_check() {
+  say ""
+  say "-- loaded module --"
+  local path
+  path=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
+  if [ -z "$path" ]; then
+    bad "snd_hda_codec_cs8409 is not present on this system"
+    hint "run: $0 --install"
+    return 1
+  fi
+  say "  resolves to: $path"
+  case "$path" in
+    */updates/*|/kernel/extra/*) ok "installed out-of-tree, so it overrides the in-tree driver" ;;
+    *) warn "resolves to an in-tree path; the patch is not in effect" ;;
+  esac
+
+  say ""
+  say "-- patch present? (the decisive check) --"
+  local n; n=$(param_count)
+  say "  module parameters: $n (patched = $WANT_PARAMS, stock = 0)"
+  if [ "$n" -ge "$WANT_PARAMS" ]; then
+    ok "headset capture patch is loaded"
+    for p in headset_mike_boost headset_mike_gain headset_buttons intmike_gain; do
+      [ -e "/sys/module/snd_hda_codec_cs8409/parameters/$p" ] \
+        || warn "expected parameter missing: $p"
+    done
+  else
+    bad "driver is UNPATCHED - headset (EarPods) capture will be digital silence"
+    hint "run: $0 --install"
+    return 1
+  fi
+
+  local sv; sv=$(cat /sys/module/snd_hda_codec_cs8409/srcversion 2>/dev/null)
+  say "  srcversion: ${sv:-unknown}"
+  say "  (a rebuild changes this; it is a build fingerprint, not a version)"
+
+  say ""
+  say "-- DKMS --"
+  if command -v dkms >/dev/null 2>&1; then
+    dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/  /' || warn "no DKMS package registered"
+  else
+    warn "dkms not installed"
+  fi
+
+  say ""
+  say "-- capture routing (root dmesg; empty as a normal user is meaningless) --"
+  local prep
+  prep=$(dmesg 2>/dev/null | grep 'cs_8409_capture_pcm_prepare' | tail -3)
+  if [ -n "$prep" ]; then
+    echo "$prep" | sed 's/^/  /'
+    if echo "$prep" | grep -q '0x1a'; then
+      ok "capture bound to 0x1a - the headset mic. This is correct."
+    else
+      bad "capture is NOT bound to 0x1a; the headset path is not being used"
+    fi
+  else
+    warn "no capture_pcm_prepare lines - nothing has opened a capture stream yet,"
+    hint "or this is not root. Open the mic, then re-run."
+  fi
+
+  say ""
+  say "-- helpers --"
+  for h in /usr/local/libexec/imac-mic-on /usr/local/bin/imac-brightness \
+           /usr/local/libexec/imac-brightness-set; do
+    if [ -x "$h" ]; then ok "$h"; else warn "missing $h ($0 --helpers)"; fi
+  done
+
+  say ""
+  say "-- brightness prerequisite (unrelated to audio, but same rebuilds) --"
+  if tr ' ' '\n' < /proc/cmdline | grep -q 'acpi_backlight=video'; then
+    ok "acpi_backlight=video present"
+  else
+    warn "acpi_backlight=video NOT on the kernel command line"
+    hint "panel brightness will not respond - see docs/brightness.md"
+  fi
+}
+
+# -------------------------------------------------------------------- --mic
+
+do_mic() {
+  say ""
+  say "-- audio server --"
+  if pgrep -x pipewire >/dev/null 2>&1; then
+    ok "PipeWire running (pid $(pgrep -x pipewire | head -1))"
+  else
+    warn "PipeWire not running - capture will fall back to ALSA"
+  fi
+
+  say ""
+  say "-- capture devices --"
+  arecord -l 2>/dev/null | grep -E '^card|^  ' | grep -vE '^\s*$' | sed 's/^/  /' | head -20
+
+  say ""
+  say "-- raw ALSA capture, bypassing the sound server --"
+  say "  (capture only: no audio is played)"
+  local dev
+  dev=$(arecord -l 2>/dev/null | grep -oE 'hw:[0-9]+,[0-9]+' | head -1)
+  if [ -z "$dev" ]; then
+    bad "no hardware capture device found"
+    return 1
+  fi
+  say "  using $dev"
+  arecord -D "$dev" -d 3 -f S16_LE -r 44100 -c 2 /tmp/imac-mic-test.wav 2>&1 | tail -2 | sed 's/^/  /'
+  if [ -f /tmp/imac-mic-test.wav ]; then
+    local rms
+    rms=$(python3 - <<'PY' 2>/dev/null || echo "unknown"
+import wave, struct, math
+w = wave.open('/tmp/imac-mic-test.wav')
+n = w.getnframes()
+raw = w.readframes(n)
+s = struct.unpack('<%dh' % (len(raw)//2), raw)
+if not s: print("empty"); raise SystemExit
+peak = max(abs(x) for x in s)
+rms = math.sqrt(sum(x*x for x in s)/len(s))
+nz = sum(1 for x in s if abs(x) > 8)
+print(f"peak={peak} rms={rms:.0f} nonzero={100*nz/len(s):.1f}%")
+PY
+)
+    say "  $rms"
+    case "$rms" in
+      *"nonzero=0.0%"*) bad "digital silence at the ALSA layer too" ;;
+      *"nonzero=0%"*)   bad "digital silence at the ALSA layer too" ;;
+      *) ok "ALSA capture has signal" ;;
+    esac
+    say ""
+    say "  If ALSA works but the PipeWire source is silent, the fault is in the"
+    say "  sound server's stream setup, not the driver. See docs/audio.md."
+    rm -f /tmp/imac-mic-test.wav
+  else
+    bad "arecord produced no file"
+  fi
+}
+
+# ----------------------------------------------------------------- --install
+
+kernels_to_build() {
+  if [ -n "$TARGET" ]; then echo "$TARGET"; return; fi
+  ls -1 /lib/modules 2>/dev/null | sort -V
+}
+
+do_install() {
+  need_root
+  need_cmd dkms
+  need_cmd git
+  need_cmd patch
+  need_cmd make
+
+  say ""
+  say "-- source --"
+  local src; src=$(src_dir_of) || src=""
+  if [ -z "$src" ]; then
+    if [ "$DRY" -eq 1 ]; then
+      say "  [dry-run] would clone $SRC_REPO at $SRC_PIN into $SRC_DIR"
+      src=$SRC_DIR
+    else
+      say "  cloning $SRC_REPO at $SRC_PIN"
+      git clone -q "$SRC_REPO" "$SRC_DIR" || die "clone failed - check network access to github.com"
+      git -C "$SRC_DIR" checkout -q "$SRC_PIN" || die "cannot check out $SRC_PIN"
+      ok "cloned and pinned to $SRC_PIN"
+      src=$SRC_DIR
+    fi
+  else
+    say "  using existing $src"
+    local head; head=$(git -C "$src" rev-parse HEAD 2>/dev/null)
+    say "  at ${head:-unknown}"
+    if [ "$head" != "$SRC_PIN" ]; then
+      warn "not the pinned commit ($SRC_PIN)"
+      hint "the headset patch is written against $SRC_PIN exactly"
+    fi
+  fi
+
+  say ""
+  say "-- headset capture patch --"
+  if source_is_patched "$src"; then
+    ok "headset capture code already present in the source"
+  else
+    if [ "$DRY" -eq 1 ]; then
+      say "  [dry-run] would fetch $PATCH_FILE from $PATCH_REPO and apply it"
+    else
+      need_cmd curl
+      local tmp; tmp=$(mktemp -d)
+      # Fetch the single patch file rather than the whole repository.
+      for url in \
+        "$PATCH_REPO/raw/HEAD/patches/$PATCH_FILE" \
+        "$PATCH_REPO/raw/master/patches/$PATCH_FILE"; do
+        if curl -fsSL "$url" -o "$tmp/$PATCH_FILE" 2>/dev/null && [ -s "$tmp/$PATCH_FILE" ]; then
+          ok "fetched $PATCH_FILE"
+          break
+        fi
+      done
+      [ -s "$tmp/$PATCH_FILE" ] \
+        || die "could not fetch $PATCH_FILE from $PATCH_REPO - download it manually and place it at $tmp/$PATCH_FILE"
+      say "  applying (expect hunks in patch_cirrus/*.h and patch_cs8409.h.diff)"
+      ( cd "$src" && patch -p1 --batch --forward < "$tmp/$PATCH_FILE" ) \
+        || die "$PATCH_FILE did not apply cleanly"
+      if source_is_patched "$src"; then
+        ok "applied; headset_mike_gain now present"
+      else
+        die "patch reported success but headset_mike_gain is still absent"
+      fi
+      rm -rf "$tmp"
+    fi
+  fi
+
+  say ""
+  say "-- pre-staged kernel tarball guard --"
+  # install.cirrus.driver.sh downloads the full kernel tarball (~150 MB) unless
+  # one is already in the build directory. On a slow link that download stalls
+  # indefinitely and the build looks hung. Skip the download when the tarball is
+  # already staged.
+  local ins="$src/install.cirrus.driver.sh"
+  if grep -q 'pre-staged' "$ins" 2>/dev/null; then
+    ok "installer already skips the download when a tarball is staged"
+  else
+    if [ "$DRY" -eq 1 ]; then
+      say "  [dry-run] would add the pre-staged tarball guard to install.cirrus.driver.sh"
+    else
+      cp -a "$ins" "$ins.orig"
+      python3 - "$ins" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'wget -c https://cdn.kernel.org/pub/linux/kernel/v$major_version.x/linux-$kernel_version.tar.xz -P $build_dir'
+new = ('if [ -s "$build_dir/linux-$kernel_version.tar.xz" ]; then\n'
+       '\t\techo "using pre-staged $build_dir/linux-$kernel_version.tar.xz (no download)"\n'
+       'else\n'
+       '\twget -c https://cdn.kernel.org/pub/linux/kernel/v$major_version.x/linux-$kernel_version.tar.xz -P $build_dir\n'
+       'fi')
+if old in s:
+    open(p,'w').write(s.replace(old, new, 1))
+    print("        guard added")
+else:
+    print("        ANCHOR NOT FOUND - the upstream installer has changed;")
+    print("        check the download guard by hand before building")
+PY
+      ok "pre-staged tarball guard added (original at $ins.orig)"
+    fi
+  fi
+
+  say ""
+  say "-- dkms.conf --"
+  # The upstream dkms.conf already runs the installer as PRE_BUILD, which is
+  # what copies the patched headers into the kernel tree. Do not hand-roll it.
+  if [ -f "$src/dkms.conf" ]; then
+    ok "present: $(grep -c . "$src/dkms.conf") lines"
+    grep -E '^(PACKAGE_NAME|PACKAGE_VERSION|BUILT_MODULE_LOCATION)' "$src/dkms.conf" | sed 's/^/    /'
+  else
+    bad "$src/dkms.conf is missing - the DKMS build cannot proceed"
+    return 1
+  fi
+
+  say ""
+  say "-- build and install --"
+  local kvers; kvers=$(kernels_to_build)
+  [ -n "$kvers" ] || die "no kernels found in /lib/modules"
+  say "  kernels: $(echo $kvers | tr '\n' ' ')"
+  say "  this compiles the codec; it takes a few minutes per kernel"
+  if [ "$DRY" -eq 1 ]; then
+    say "  [dry-run] would: dkms install --force $PKG/$VER -k <each>"
+    return 0
+  fi
+
+  dkms remove "$PKG/$VER" --all >/dev/null 2>&1
+  local rc=0
+  for k in $kvers; do
+    say "  building for $k ..."
+    if dkms install --force "$PKG/$VER" -k "$k" 2>&1 | tail -4 | sed 's/^/    /'; then
+      ok "$k"
+    else
+      bad "$k failed"
+      rc=1
+    fi
+  done
+  [ $rc -eq 0 ] || { hint "see /var/lib/dkms/$PKG/$VER/build/make.log"; return 1; }
+
+  say ""
+  say "-- the initramfs must contain the module --"
+  say "  a DKMS module is not in the initramfs until you rebuild it:"
+  for k in $kvers; do
+    say "    dracut --force --kver $k"
+  done
+  hint "rebuild the initramfs before rebooting, or the codec will fall back to stock"
+
+  say ""
+  say "-- verify --"
+  say "  the check below only proves it once the new module is LOADED, so reboot first:"
+  hint "$0 --check"
+}
+
+# ------------------------------------------------------------------- --remove
+
+do_remove() {
+  need_root
+  say ""
+  say "-- removing $PKG/$VER --"
+  if [ "$DRY" -eq 1 ]; then
+    say "  [dry-run] would: dkms remove $PKG/$VER --all"
+    return 0
+  fi
+  dkms remove "$PKG/$VER" --all 2>&1 | tail -3 | sed 's/^/  /'
+  ok "removed - the in-tree CS8409 codec will be used again"
+  warn "headset capture will be digital silence again after reboot"
+  say "  rebuild the initramfs before rebooting"
+}
+
+# ------------------------------------------------------------------ --helpers
+
+HELPER_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+do_helpers() {
+  need_root
+  local install=1
+  [ "${1:-}" = "remove" ] && install=0
+
+  say ""
+  if [ $install -eq 1 ]; then
+    say "-- installing helpers --"
+    install -m 755 "$HELPER_DIR/imac-mic-on"          /usr/local/libexec/imac-mic-on
+    install -m 755 "$HELPER_DIR/imac-brightness"      /usr/local/bin/imac-brightness
+    install -m 755 "$HELPER_DIR/imac-brightness-set"  /usr/local/libexec/imac-brightness-set
+    ok "imac-mic-on, imac-brightness, imac-brightness-set"
+    if [ -f "$HELPER_DIR/../sudoers/imac-brightness" ]; then
+      install -m 440 "$HELPER_DIR/../sudoers/imac-brightness" /etc/sudoers.d/imac-brightness
+      visudo -cf /etc/sudoers.d/imac-brightness >/dev/null 2>&1 \
+        && ok "sudoers rule installed and validated" \
+        || { bad "sudoers rule FAILED validation - removed"; rm -f /etc/sudoers.d/imac-brightness; }
+    else
+      warn "sudoers/imac-brightness not found next to this script; skipped"
+      hint "imac-brightness needs NOPASSWD for /usr/local/libexec/imac-brightness-set"
+    fi
+    say ""
+    say "  imac-mic-on must run at boot. If you have not wired it up:"
+    hint "systemctl enable --now imac-mic-on.service   # or add to an existing unit"
+  else
+    say "-- removing helpers --"
+    rm -f /usr/local/libexec/imac-mic-on /usr/local/bin/imac-brightness \
+          /usr/local/libexec/imac-brightness-set /etc/sudoers.d/imac-brightness
+    ok "removed"
+  fi
+}
+
+# ---------------------------------------------------------------------- main
+
+case "${1:---check}" in
+  --check)   MODE=check ;;
+  --install) MODE=install ;;
+  --remove)  MODE=remove ;;
+  --mic)     MODE=mic ;;
+  --helpers) MODE=helpers ;;
+  -h|--help)
+    sed -n '2,/^set -uo/p' "$0" | sed 's/^# \?//; $d'
+    exit 0 ;;
+  *) die "unknown option: $1 (try --help)" ;;
+esac
+shift || true
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -k) TARGET=$2; shift 2 ;;
+    --dry-run|-n) DRY=1; shift ;;
+    remove) [ "$MODE" = helpers ] && do_helpers remove; exit 0 ;;
+    *) die "unexpected argument: $1" ;;
+  esac
+done
+
+case "$MODE" in
+  check)   do_check ;;
+  install) do_install ;;
+  remove)  do_remove ;;
+  mic)     do_mic ;;
+  helpers) do_helpers ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Why the old scripts were wrong
+#
+# scripts/imac-audio-fix and scripts/imac-audio-module both recorded that
+# jackdanyell's fork "targets the iMac18,3" and therefore should be removed in
+# favour of davidjo's driver. That is backwards. jackdanyell's tree is what
+# carries the headset capture fix, and both old scripts would remove it:
+#
+#     sudo dkms remove snd_hda_macbookpro/0.2 --all
+#
+# They are retained in git history rather than deleted, but they are no longer
+# the supported path. If you are following an older guide that runs them, stop.
+#
+# docs/audio.md has the full diagnosis.

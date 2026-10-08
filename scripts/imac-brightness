@@ -1,0 +1,104 @@
+#!/bin/bash
+# imac-brightness - set the internal panel brightness.
+#
+# NOTE: since the acpi_backlight=video fix, KDE's own brightness slider works
+# and this script is no longer needed for that. It remains useful for an
+# exact level, min/max, and use without a desktop session.
+#
+# It originally existed because the slider had nothing to control. The cause was
+# NOT a UPower regression - upower -e lists no backlight device in either
+# mode. With acpi_backlight=native, amdgpu registered the only node present
+# and it is type 'raw'; PowerDevil only drives 'firmware' and 'platform', so
+# it ignored that one. Booting acpi_backlight=video registers the firmware
+# node instead (acpi_video0) and stands amdgpu's down.
+#
+# See docs/brightness.md in the repository.
+# The kernel side is fine - /sys/class/backlight works and accepts writes - so
+# this drives that directly.
+#
+#   imac-brightness up        +10%
+#   imac-brightness down      -10%
+#   imac-brightness set <0-100>
+#   imac-brightness get       print the current percentage only
+#   imac-brightness max|min
+#
+# The device is discovered rather than hardcoded: the name can change if the
+# driver or the card numbering changes.
+set -uo pipefail
+
+STEPS=10
+
+bl_device() {
+  # Order matters; see /usr/local/libexec/imac-brightness-set for why.
+  #   1. acpi_video* whose max_brightness is not the generic 0..100 - the panel
+  #   2. any acpi_video*
+  #   3. amdgpu_bl* and friends - writes accepted, panel ignores them
+  #   4. anything writable
+  local d max
+  for d in /sys/class/backlight/acpi_video*; do
+    [ -w "$d/brightness" ] || continue
+    max=$(cat "$d/max_brightness" 2>/dev/null) || continue
+    [ "$max" != "100" ] && { echo "$d"; return 0; }
+  done
+  for d in /sys/class/backlight/acpi_video*; do
+    [ -w "$d/brightness" ] && { echo "$d"; return 0; }
+  done
+  for d in /sys/class/backlight/*; do
+    [ -e "$d" ] || continue
+    case "$(basename "$d")" in
+      amdgpu_bl*|intel_backlight*|nvidia_wmi_ec_backlight*) [ -w "$d/brightness" ] && { echo "$d"; return 0; } ;;
+    esac
+  done
+  for d in /sys/class/backlight/*; do
+    [ -w "$d/brightness" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+
+notify() {
+  local pct=$1
+  local msg="Brightness: ${pct}%"
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a "Brightness" -h int:value:$((pct * 5)) "$msg" 2>/dev/null
+  elif command -v kdialog >/dev/null 2>&1; then
+    kdialog --passivepopup "$msg" 2 2>/dev/null
+  fi
+  printf '%s\n' "$pct"
+}
+
+DEV=$(bl_device) || { echo "imac-brightness: no writable backlight device found" >&2; exit 1; }
+BL="$DEV/brightness"
+MAX=$(cat "$DEV/max_brightness" 2>/dev/null) || exit 1
+[ -n "$MAX" ] || { echo "imac-brightness: cannot read max_brightness" >&2; exit 1; }
+CUR=$(cat "$BL" 2>/dev/null) || exit 1
+
+to_pct() { echo $(( $1 * 100 / MAX )); }
+to_val() { echo $(( $1 * MAX / 100 )); }
+
+# The write goes through a privileged helper rather than straight to sysfs.
+# Two reasons: sysfs attribute permissions cannot be changed by udev (the kernel
+# sets them at creation and sysfs has no chmod), and setuid is ignored on shell
+# scripts. A sudoers rule grants NOPASSWD for that one helper and nothing else.
+SET=/usr/local/libexec/imac-brightness-set
+
+write() {
+  local val=$1 pct newv
+  [ "$val" -lt 0 ] && val=0
+  [ "$val" -gt "$MAX" ] && val=$MAX
+  newv=$(sudo -n "$SET" "$val" 2>/dev/null) || {
+    echo "imac-brightness: set failed (sudo -n $SET)" >&2; exit 1; }
+  pct=$(to_pct "$newv")
+  notify "$pct" >/dev/null
+  echo "$pct"
+}
+
+case "${1:-get}" in
+  up)     write $(( CUR + (MAX * STEPS / 100) )) ;;
+  down)   write $(( CUR - (MAX * STEPS / 100) )) ;;
+  max)    write "$MAX" ;;
+  min)    write 0 ;;
+  set)    [ -n "${2:-}" ] || { echo "usage: imac-brightness set <0-100>" >&2; exit 2; }
+          write "$(to_val "$2")" ;;
+  get)    to_pct "$CUR" ;;
+  *)      echo "usage: imac-brightness {up|down|max|min|set <0-100>|get}" >&2; exit 2 ;;
+esac

@@ -155,8 +155,10 @@ before changing anything.
 | `scripts/imac-verify` | **one command that says whether this machine works** — read-only; paste its output when reporting an issue |
 | `scripts/check-5k.sh` | read-only 5K/tiling diagnostic |
 | `scripts/imac-reapply` | re-apply local customisations after an update |
-| `scripts/imac-audio-fix` | **SUPERSEDED** — encodes the old "force 4-channel" diagnosis; kept for the record, `--check` only |
-| `scripts/imac-audio-module` | **SUPERSEDED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/audio.md](docs/audio.md) |
+| `scripts/imac-audio` | **the audio path** — verify the loaded codec, install the patched driver, microphone diagnostics |
+| `scripts/imac-brightness` | set panel brightness without the desktop (the slider works on its own now) |
+| `scripts/imac-audio-fix` | **RETIRED** — would remove the driver that makes headset capture work; kept as a stub the record, `--check` only |
+| `scripts/imac-audio-module` | **RETIRED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/audio.md](docs/audio.md) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
 
 ## Credits

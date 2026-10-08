@@ -1,0 +1,11 @@
+# Allow the desktop user to change the panel brightness without a password.
+#
+# Granted so that brightness WORKS: KDE\x27s slider cannot function on this
+# machine because UPower 1.91 no longer enumerates backlights, so PowerDevil
+# never finds a device. /usr/local/bin/imac-brightness computes the value and
+# calls the helper below.
+#
+# This grants exactly one capability: writing an integer to
+# /sys/class/backlight/*/brightness. Nothing else. Revoke with:
+#   sudo rm /etc/sudoers.d/imac-brightness
+ilya ALL=(root) NOPASSWD: /usr/local/libexec/imac-brightness-set

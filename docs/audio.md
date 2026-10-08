@@ -289,7 +289,7 @@ done
 >
 > DKMS installs into `updates/`, and the loaded module is that DKMS build — so
 > DKMS wins the codec bind on this machine and the patched driver is what is
-> actually loaded. `scripts/imac-audio-module`'s ordering argument
+> actually loaded. The retired `scripts/imac-audio-module`'s ordering argument
 > (`updates/ext01` sorting before `updates/dkms`) does not apply: DKMS is not
 > installing into `updates/dkms` here, so there is nothing to sort ahead of.
 > Its DKMS check has been downgraded from FAIL to warn accordingly.
@@ -375,7 +375,7 @@ registration is ever removed, **no codec loads at all**. Restore with
 
 ### The old ext01 approach — superseded
 
-`scripts/imac-audio-module` builds into `updates/ext01` and is retained only
+`scripts/imac-audio-module` built into `updates/ext01` and is retained only
 because it is the correct mechanism for a *hand-built* module. It is not how the
 audio is fixed now: DKMS with `power_save=0` is. Its vermagic check is also
 insufficient on its own — a mismatched tree produces `disagrees about version of
@@ -447,20 +447,31 @@ curve — mute up to ~12%, then nearly full. Fix with
 ### Applying it
 
 ```bash
-# Only the 4-channel half of imac-audio-fix is superseded: it forces the
-# analog-surround-40 enumeration, which is the faulty one. Its DKMS half is
-# CORRECT - dkms status confirms snd-hda-macbookpro/0.1 is the loaded driver.
-# imac-audio-module's argument against DKMS does not hold on this machine.
-sudo ~/bin/imac-audio-fix --dry-run   # show what would change
-sudo ~/bin/imac-audio-fix             # apply
-sudo ~/bin/imac-audio-fix --check     # verify
-sudo ~/bin/imac-audio-fix --undo      # roll back
+scripts/imac-audio --check      # verify what is loaded right now (read-only)
+sudo scripts/imac-audio --install
+sudo scripts/imac-audio --mic    # capture diagnostics
+scripts/imac-audio --help
 ```
 
-It writes the `power_save` option, installs davidjo's driver (with the
-`BUILT_MODULE_LOCATION` fix below), forces the 4-channel profile with
-`soft-mixer = true`, and sets the Apple crossover chain aside. **It never
-reboots.**
+> **Both older audio scripts are retired.** `imac-audio-fix` and
+> `imac-audio-module` each recorded that jackdanyell's fork "targets the
+> iMac18,3" and should be removed. That is backwards — jackdanyell's tree is
+> what carries the headset capture fix, and `imac-audio-fix` would have run
+> `dkms remove snd_hda_macbookpro/0.2 --all`. They are stubs now and exit 1.
+> Their originals are in git history.
+
+The `power_save` option is worth keeping — HDA runtime power management
+suspends the controller that powers the CS8409 I2C bridge, so the amplifiers
+can never be programmed, giving total silence with no error anywhere
+(`davidjo/snd_hda_macbookpro` issues 209 and 217):
+
+```
+options snd_hda_intel power_save=0 power_save_controller=N
+```
+
+**The 4-channel forcing is not.** It configures the `analog-surround-40`
+enumeration, which is the faulty one. The internal codec should stay at
+`analog-stereo`; see [Speakers](#speakers).
 
 ### The DKMS build trap (why davidjo appeared not to work here)
 
@@ -499,13 +510,13 @@ non-problem.
 
 `scripts/imac-audio-module` is retained because building against
 `/lib/modules/$(uname -r)/build` is still the correct mechanism, but it is not
-the fix. **Try `imac-audio-fix` first.**
+the fix. **Use `scripts/imac-audio`.**
 
 ### If it is still silent after a reboot
 
 Report these three facts:
 
-1. Does `imac-audio-fix --check` say `power_save=N`?
+1. Does `scripts/imac-audio --check` pass, and is `power_save` still `N`?
 2. Does `/proc/asound/card0/codec#0` show the CS42L83 sub-codec?
 3. With a 4-channel stream, do channels 0 and 3 play while 1 and 2 stay silent?
 

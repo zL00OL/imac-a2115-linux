@@ -18,7 +18,8 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 # kernel is now newest -> re-apply -> (reboot).
 #
 # The audio step is not optional. The patched CS8409 codec is a DKMS module
-# (snd-hda-macbookpro/0.1), which rebuilds itself for each new kernel. It is
+# (snd_hda_macbookpro/0.2, jackdanyell + the headset capture patch), which
+# rebuilds itself for each new kernel. It is
 # still checked here, because a kernel that arrives without a built module
 # boots with no patched codec and the internal speakers are silent.
 # See docs/audio.md - scripts/imac-audio-module is SUPERSEDED and is not used.
@@ -53,13 +54,27 @@ die()  { say "ABORT: $*"; say "see $LOG"; exit 1; }
 # pending reboot. Read the BLS "version" field instead (1@7.2.2-1-default),
 # falling back to the directory of the "linux" path, then to /lib/modules.
 # Entries whose kernel directory no longer exists are stale and are dropped.
+# This machine has two EFI partitions. The BLS entries live on XBOOTLDR; the
+# ESP's own entries directory is empty. Firmware reads the ESP's loader.conf but
+# the boot entries themselves come from XBOOTLDR, so hardcoding either path gets
+# it wrong in one direction or the other. See docs/recovery.md.
+# imac-audio-module has the same hardcoding bug and is retired.
+ENTRYDIR=""
+for d in /boot/efi-xbootldr/loader/entries "$ENTRYDIR" \
+         /boot/efi/opensuse/loader/entries; do
+  [ -d "$d" ] || continue
+  # Prefer whichever actually holds entries.
+  if [ -n "$(ls -1 "$d"/*.conf 2>/dev/null)" ]; then ENTRYDIR=$d; break; fi
+  [ -z "$ENTRYDIR" ] && ENTRYDIR=$d
+done
+
 installed_kernels() {
   local out v
   out=$(awk '/^version[[:space:]]/ { v=$2; sub(/^[^@]*@/, "", v); if (v != "") print v }' \
-         /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+         "$ENTRYDIR"/*.conf 2>/dev/null | sort -uV)
   if [ -z "$out" ]; then
     out=$(awk '/^linux[[:space:]]/ { for (i=2;i<=NF;i++) if ($i ~ /^\//) { n=split($i,a,"/"); print a[n-1] } }' \
-           /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+           "$ENTRYDIR"/*.conf 2>/dev/null | sort -uV)
   fi
   if [ -n "$out" ]; then
     for v in $out; do [ -d "/lib/modules/$v" ] && printf '%s\n' "$v"; done
@@ -80,7 +95,23 @@ step "0. preflight"
 AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
 say "  ESP free: ${AVAIL}M"
 say "  running kernel: $(uname -r)"
-say "  BLS entries: $(ls -1 /boot/efi/loader/entries/ 2>/dev/null | wc -l)"
+say "  BLS entries: $(ls -1 "$ENTRYDIR"/*.conf 2>/dev/null | wc -l) in $ENTRYDIR"
+
+# Panel brightness depends on this parameter, and it lives only in the BLS
+# entries. Anything that regenerates them can drop it silently, and the display
+# still looks perfect - so it reads as a hardware fault. Warn loudly.
+BLMISS=0
+for f in "$ENTRYDIR"/*.conf; do
+  [ -e "$f" ] || continue
+  grep -q 'acpi_backlight=video' "$f" || { say "  WARN  $(basename "$f") has no acpi_backlight=video"; BLMISS=1; }
+done
+if [ "$BLMISS" -eq 0 ]; then
+  say "  brightness: acpi_backlight=video present in all entries"
+else
+  say "  an entry is missing acpi_backlight=video; brightness will not respond."
+  say "  add it to that entry's options line and rebuild the initramfs."
+  say "  see docs/brightness.md"
+fi
 
 if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
   say "  kernel constraint ACTIVE (holding the kernel at the version the patched amdgpu and audio DKMS builds were made for - see docs/kernel-updates.md)"
@@ -145,21 +176,21 @@ say "  need ${NEED}M, have ${AVAIL}M"
 # backup means a mistake here is always reversible.
 SAVEDIR=$UHOME/5k-stackC-backup/esp-prune-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$SAVEDIR"
-cp -p /boot/efi/loader/entries/*.conf "$SAVEDIR/" 2>/dev/null
+cp -p "$ENTRYDIR"/*.conf "$SAVEDIR/" 2>/dev/null
 say "  backed up all BLS entries to $SAVEDIR"
 
 # Prune ONLY snapper entries numbered >= 70. Never touches 5k-stackc-* entries
 # and never touches the loader default, so there is always a bootable fallback.
 prune_entries() {
-  for f in $(ls -1 /boot/efi/loader/entries/ 2>/dev/null \
+  for f in $(ls -1 "$ENTRYDIR"/ 2>/dev/null \
              | grep -E '^opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$'); do
-    rm -f "/boot/efi/loader/entries/$f"
+    rm -f ""$ENTRYDIR"/$f"
   done
 }
 
 if [ "$AVAIL" -lt "$NEED" ]; then
   say "  not enough space; pruning stale snapper entries"
-  PRUNE=$(ls -1 /boot/efi/loader/entries/ 2>/dev/null \
+  PRUNE=$(ls -1 "$ENTRYDIR"/ 2>/dev/null \
           | grep -cE '^opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$')
   say "  candidates: $PRUNE"
   if [ "$PRUNE" -eq 0 ]; then
@@ -171,7 +202,7 @@ if [ "$AVAIL" -lt "$NEED" ]; then
   say "  ESP free now: ${AVAIL}M"
   if [ "$AVAIL" -lt "$NEED" ]; then
     die "still only ${AVAIL}M after pruning $PRUNE entries; need ${NEED}M.
-  Restore with:  cp -p $SAVEDIR/*.conf /boot/efi/loader/entries/
+  Restore with:  cp -p $SAVEDIR/*.conf "$ENTRYDIR"/
   Nothing has been updated; the system is unchanged apart from the pruned
   (backed-up) BLS files."
   fi
@@ -184,13 +215,13 @@ fi
 CUR_ENTRY=$(sed -n 's/^default=//p;/^default[[:space:]]/s/^default[[:space:]]*//p' \
             /boot/efi/loader/loader.conf 2>/dev/null | head -1)
 say "  default boot entry: ${CUR_ENTRY:-unset}"
-if [ -n "$CUR_ENTRY" ] && [ ! -f "/boot/efi/loader/entries/$CUR_ENTRY" ]; then
+if [ -n "$CUR_ENTRY" ] && [ ! -f ""$ENTRYDIR"/$CUR_ENTRY" ]; then
   say "  restoring: default entry $CUR_ENTRY is missing"
-  cp -p "$SAVEDIR/$CUR_ENTRY" /boot/efi/loader/entries/ 2>/dev/null \
+  cp -p "$SAVEDIR/$CUR_ENTRY" "$ENTRYDIR"/ 2>/dev/null \
     && say "  restored $CUR_ENTRY" \
     || die "default boot entry $CUR_ENTRY missing and unrestorable from $SAVEDIR"
 fi
-[ "$(ls -1 /boot/efi/loader/entries/ 2>/dev/null | wc -l)" -gt 0 ] \
+[ "$(ls -1 "$ENTRYDIR"/ 2>/dev/null | wc -l)" -gt 0 ] \
   || die "no BLS entries left at all - restore from $SAVEDIR"
 
 #--------------------------------------------------------- 2. kernel decision
@@ -263,7 +294,7 @@ step "4b. audio codec module for kernel $NEWEST2"
 DKMS_LINE=$(dkms status 2>/dev/null | grep -i macbookpro | head -1)
 if [ -z "$DKMS_LINE" ]; then
   bad "no DKMS codec registered - the speakers WILL be silent after reboot"
-  hint "sudo dkms install --force snd-hda-macbookpro/0.1"
+  hint "sudo scripts/imac-audio --install"
   hint "see docs/audio.md for the driver source and build guards"
 else
   ok "DKMS codec registered: $DKMS_LINE"
@@ -272,7 +303,7 @@ else
   else
     warn "no DKMS build listed for $NEWEST2 yet"
     warn "dkms normally builds on kernel install; force it if it did not:"
-    hint "sudo dkms install --force snd-hda-macbookpro/0.1 -k $NEWEST2"
+    hint "sudo scripts/imac-audio --install -k $NEWEST2"
   fi
 fi
 

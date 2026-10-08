@@ -1,317 +1,42 @@
 #!/bin/bash
-
-# Resolve the invoking user's home rather than assuming one, so these scripts run
-# for any account rather than only the one they were written on.
-UH=${SUDO_USER:-$(logname 2>/dev/null || echo "${USER:-root}")}
-UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
-[ -n "$UHOME" ] || UHOME="$HOME"
-
-#==============================================================================
-# imac-audio-fix - apply the iMac19,1 (A2115) speaker fixes found by research
+# imac-audio-fix - RETIRED. Superseded by scripts/imac-audio.
 #
-#   ####  SUPERSEDED - DO NOT RUN BLIND  ####
+# This script was written around a conclusion that has since been disproved. It
+# believes jackdanyell's CS8409 fork "targets the iMac18,3" and should be
+# removed in favour of davidjo's driver. The opposite is true: jackdanyell's
+# tree carries the headset capture fix, and this script would have removed it.
 #
-#   This script encodes an older diagnosis that later measurement contradicted:
+# Its final section, verbatim from the version that was here:
 #
-#     * It installs davidjo's driver via DKMS and forces the 4-channel
-#       enumeration (analog-surround-40) with a WirePlumber rule.
-#     * At the time, imac-audio-module and imac-reapply stated DKMS must never
-#       be used and flagged a DKMS registration as a FAIL. That was WRONG, and
-#       has since been corrected in both: DKMS is the working path.
-#     * Measurement later showed the opposite: the 4-channel enumeration is the
-#       FAULTY one. The 2-channel analog-stereo enumeration is the working one,
-#       and on this machine it needs no configuration at all.
+#     # Only one CS8409 driver may be active. jackdanyell's fork is for the iMac18,3.
+#     if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro/0.2'; then
+#       warn "jackdanyell 0.2 DKMS registration also present - it may win the codec bind"
+#       hint "sudo dkms remove snd_hda_macbookpro/0.2 --all"
+#     fi
 #
-#   It is retained because it documents how the fix was found, and because
-#   --check is still a useful read-only survey. But running it applies settings
-#   that push the codec back toward the broken state.
+# It also forced 4-channel output, which is not what this machine wants.
 #
-#   What to use instead: docs/audio.md, "Internal speakers". In short - DKMS is
-#   correct and expected, power_save=0 is required, and forcing a 4-channel
-#   profile is not.
-#
-#   sudo imac-audio-fix --check      # report only, change nothing
-#   sudo imac-audio-fix --dry-run    # show what would change, change nothing
-#   sudo imac-audio-fix              # apply
-#   sudo imac-audio-fix --undo       # roll back this script's changes
-#
-# WHY THIS EXISTS - the previous diagnosis was wrong
-# --------------------------------------------------
-# Earlier work blamed the PipeWire chain and then chased a kernel module
-# ordering problem. Both were red herrings. The actual causes are documented
-# on the driver tracker for this exact machine model:
-#
-# 1. HDA runtime power management (davidjo/snd_hda_macbookpro#209, iMac19,1)
-#    Ubuntu and other distros ship snd_hda_intel power_save=1, so the
-#    controller runtime-suspends after a second of idle. The CS8409's I2C
-#    bridge is powered from that controller, so with the controller suspended
-#    the amplifiers can never be programmed. The failure is completely
-#    silent: no error anywhere, digital path running, pin enabled, PCM RUNNING,
-#    and no sound at any volume. On iMac19,1 (CS8409/CS42L83, 4x TAS5764L)
-#    the amplifier I2C status reads 0x20 instead of 0x18.
-#    Fix: power_save=0 power_save_controller=N
-#    Reporter states internal speakers then work with davidjo's driver
-#    unmodified from master.
-#
-# 2. Wrong playback format / TDM slot corruption
-#    (davidjo#211, davidjo#217)
-#    The codec's 4-slot TDM output delivers slots 0 and 3 correctly and
-#    corrupts the middle slots, so only 2 of 4 channels ever play - which is
-#    exactly a "rear pair works, front pair silent" symptom. Apple's native
-#    format for this codec is 0x4033 = S24_3LE, 4ch, 44.1 kHz. The 2-channel
-#    path in the driver misaligns data; a native 4-channel stream is clean.
-#    Fix: force the 4-channel profile.
-#
-# 3. There is no hardware volume (davidjo#217)
-#    No codec node has an amp, so "PCM Playback Volume" is an ALSA softvol
-#    that PipeWire mistakes for a hardware mixer, giving a stepped curve
-#    (mute up to ~12%, then near full).
-#    Fix: api.alsa.soft-mixer = true
-#
-# This script never reboots. The machine is often unattended and a boot that
-# hangs before the network is unrecoverable without physical access.
-#==============================================================================
-set -uo pipefail
+# It has been kept as a stub rather than deleted so that an older guide, a
+# muscle-memory habit, or a link to it fails with an explanation instead of
+# quietly undoing a working fix. The full version is in git history.
 
-LOG=/var/log/imac-audio-fix.log
-MODPROBE=/etc/modprobe.d/99-imac-audio.conf
-WP=$UHOME/.config/wireplumber/rules.d/60-imac-audio-4ch.rules
-CHAIN=$UHOME/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
-DKMS_SRC=/usr/src/snd-hda-macbookpro-0.1
+cat >&2 <<'EOF'
 
-say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
-ok()   { say "  [ ok ] $*"; }
-bad()  { say "  [FAIL] $*"; }
-warn() { say "  [warn] $*"; }
-info() { say "  [info] $*"; }
-hint() { say "    fix:  $*"; }
-die()  { say "ABORT: $*"; say "see $LOG"; exit 1; }
+  imac-audio-fix: RETIRED - do not run this.
 
-CHECK=0; DRY=0; UNDO=0
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --check)   CHECK=1 ;;
-    --dry-run) DRY=1 ;;
-    --undo)    UNDO=1 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
-    *)         die "unknown argument: $1" ;;
-  esac
-  shift
-done
+  It would remove the driver that makes headset (EarPods) capture work.
+  It is also built for a different approach: davidjo's driver hand-placed
+  into updates/ext01, rather than jackdanyell's tree built through DKMS.
 
-: > "$LOG"
-say "=== imac-audio-fix $(date -Is) ==="
-[ "$(id -u)" -eq 0 ] || { say "must run as root"; exit 1; }
-[ "$UNDO" -eq 1 ] || say "kernel: $(uname -r)"
+  Use instead:
 
-#--------------------------------------------------------------------- undo
-if [ "$UNDO" -eq 1 ]; then
-  say ""; say "-- undo --"
-  rm -f "$MODPROBE"
-  say "  removed $MODPROBE (power_save back to distro default)"
-  rm -f "$WP"
-  say "  removed $WP (4-channel profile no longer forced)"
-  if [ -f "$CHAIN.disabled-by-imac-audio-fix" ]; then
-    mv "$CHAIN.disabled-by-imac-audio-fix" "$CHAIN"
-    say "  restored the PipeWire Apple crossover chain"
-  fi
-  dkms remove snd_hda_macbookpro/0.1 --all >/dev/null 2>&1 \
-    && say "  removed the DKMS registration for davidjo's driver" \
-    || say "  no davidjo DKMS registration to remove"
-  say ""
-  say "  reboot to return to the previous state"
-  exit 0
-fi
+      sudo scripts/imac-audio --check     verify what is loaded now
+      sudo scripts/imac-audio --install   build and install the patched driver
+      sudo scripts/imac-audio --mic       microphone diagnostics
+      scripts/imac-audio --help           full options
 
-#---------------------------------------------------------------- check mode
-if [ "$CHECK" -eq 1 ]; then
-  say ""; say "-- HDA runtime power management (fix #1) --"
-  CURPS=$(cat /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null)
-  CURPSC=$(cat /sys/module/snd_hda_intel/parameters/power_save_controller 2>/dev/null)
-  say "  snd_hda_intel power_save=$CURPS power_save_controller=$CURPSC"
-  if [ "$CURPS" = "N" ] && [ "$CURPSC" = "N" ]; then
-    ok "runtime PM disabled (the documented cause of total silence)"
-  else
-    bad "runtime power management is ENABLED - amplifiers may never be programmed"
-    hint "echo 'options snd_hda_intel power_save=0 power_save_controller=N' | sudo tee $MODPROBE"
-  fi
-  if [ -f "$MODPROBE" ]; then ok "$MODPROBE present"; else info "$MODPROBE absent"; fi
+  See docs/audio.md for why the old conclusion was wrong.
 
-  say ""; say "-- codec driver --"
-  RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
-  say "  resolves to: ${RESOLVED:-not found}"
-  case "$RESOLVED" in
-    *updates/dkms*|*updates/extra*) ok "out-of-tree driver installed" ;;
-    "") bad "no cs8409 module found at all" ;;
-    *) warn "the in-tree module wins; the patched driver is not installed" ;;
-  esac
-  if dkms status 2>/dev/null | grep -qi macbookpro; then
-    ok "DKMS registration: $(dkms status | grep -i macbookpro | head -1)"
-  else
-    warn "no davidjo DKMS registration"
-  fi
-
-  say ""; say "-- runtime state --"
-  dmesg 2>/dev/null | grep -iE "cs8409|cs42l83|TAS5764" | tail -6 | sed 's/^/  /'
-  say ""
-  if [ -f /proc/asound/card0/codec#0 ]; then
-    say "  codec: $(grep -m1 'Codec:' /proc/asound/card0/codec#0 | sed 's/^ *//')"
-    say "  $(grep -m1 'autoconfig for CS8409' /proc/asound/card0/codec#0 || echo '  (no CS8409 autoconfig line)')"
-  fi
-  say "  PCM devices:"
-  grep -E "^0[0-9]-00" /proc/asound/pcm 2>/dev/null | sed 's/^/    /'
-  SINK=$(wpctl status 2>/dev/null | grep -m1 '\*' | sed 's/^ *\* //')
-  say "  default sink: ${SINK:-unknown}"
-
-  say ""; say "-- PipeWire / WirePlumber --"
-  [ -f "$WP" ] && ok "4-channel + soft-mixer rule present" \
-               || warn "rule absent: $WP"
-  [ -f "$CHAIN" ] && info "Apple crossover chain present ($CHAIN)" \
-                  || info "Apple crossover chain not present"
-  exit 0
-fi
-
-#--------------------------------------------------------------- apply
-say ""; say "-- 1. disable HDA runtime power management --"
-# This is the single highest-confidence change and costs nothing. On iMac19,1
-# it is a documented cause of "everything looks right, no sound at any volume".
-if [ -f "$MODPROBE" ] && grep -q 'power_save=0' "$MODPROBE"; then
-  ok "already set"
-elif [ "$DRY" -eq 1 ]; then
-  say "  [dry-run] would: write $MODPROBE with power_save=0"
-else
-  printf '%s\n' \
-    '# Added by imac-audio-fix.' \
-    '# HDA runtime power management suspends the controller, which powers the' \
-    '# CS8409 I2C bridge, so the CS42L83 / TAS5764L amplifiers can never be' \
-    '# programmed. The result is total silence with no error anywhere.' \
-    '# Ref: davidjo/snd_hda_macbookpro issue 209 (iMac19,1), 217.' \
-    'options snd_hda_intel power_save=0 power_save_controller=N' > "$MODPROBE" \
-    && ok "wrote $MODPROBE" || die "could not write $MODPROBE"
-fi
-
-#--------------------------------------------------------------- driver
-say ""; say "-- 2. davidjo out-of-tree CS8409 driver --"
-# iMac19,1 reports on this driver. jackdanyell's fork targets the iMac18,3.
-if [ ! -d "$DKMS_SRC" ]; then
-  if [ "$DRY" -eq 1 ]; then
-    say "  [dry-run] would: clone davidjo/snd_hda_macbookpro to $DKMS_SRC"
-  else
-    say "  $DKMS_SRC not present, cloning"
-    command -v git >/dev/null || die "git is required to fetch the driver"
-    git clone -q https://github.com/davidjo/snd_hda_macbookpro.git "$DKMS_SRC" \
-      || die "clone failed - check network access to github.com"
-    ok "cloned"
-  fi
-fi
-if [ -f "$DKMS_SRC/dkms.conf" ]; then
-  # The kernel moved the HDA codecs into codecs/cirrus/, so the .ko is built at
-  # build/hda/codecs/cirrus while dkms.conf still looks in build/hda. DKMS then
-  # reports a failure having built nothing. One line fixes it.
-  if grep -q 'BUILT_MODULE_LOCATION\[0\]="build/hda"' "$DKMS_SRC/dkms.conf"; then
-    if [ "$DRY" -eq 1 ]; then
-      say "  [dry-run] would: patch BUILT_MODULE_LOCATION in $DKMS_SRC/dkms.conf"
-    else
-      sed -i 's#BUILT_MODULE_LOCATION\[0\]="build/hda"#BUILT_MODULE_LOCATION[0]="build/hda/codecs/cirrus"#' \
-        "$DKMS_SRC/dkms.conf" \
-        && ok "patched BUILT_MODULE_LOCATION -> build/hda/codecs/cirrus" \
-        || die "could not patch dkms.conf"
-    fi
-  else
-    ok "BUILT_MODULE_LOCATION already correct"
-  fi
-
-  if [ "$DRY" -eq 1 ]; then
-    say "  [dry-run] would: dkms install --force snd_hda_macbookpro/0.1"
-  else
-    dkms remove snd_hda_macbookpro/0.1 --all >/dev/null 2>&1
-    say "  running: dkms install (this compiles the module)"
-    dkms install --force snd-hda-macbookpro/0.1 2>&1 | tail -6 | sed 's/^/    /'
-    if dkms status 2>/dev/null | grep -q 'snd_hda_macbookpro/0.1.*installed'; then
-      ok "installed: $(dkms status | grep -i macbookpro | head -1)"
-    else
-      bad "DKMS did not report an installed module"
-      hint "check /var/lib/dkms/snd_hda_macbookpro/0.1/build/make.log"
-    fi
-  fi
-else
-  warn "$DKMS_SRC/dkms.conf not found - skipping driver step"
-fi
-
-# Only one CS8409 driver may be active. jackdanyell's fork is for the iMac18,3.
-if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro/0.2'; then
-  warn "jackdanyell 0.2 DKMS registration also present - it may win the codec bind"
-  hint "sudo dkms remove snd_hda_macbookpro/0.2 --all"
-fi
-if [ -d /lib/modules/$(uname -r)/updates/ext01 ]; then
-  if ls /lib/modules/$(uname -r)/updates/ext01/snd-hda-codec-cs8409.ko* >/dev/null 2>&1; then
-    warn "a hand-built ext01 module is present alongside DKMS - remove it"
-    hint "rm -v /lib/modules/$(uname -r)/updates/ext01/snd-hda-codec-cs8409.ko*"
-  fi
-fi
-
-#--------------------------------------------------------------- PipeWire
-say ""; say "-- 3. force 4-channel output and distrust the fake hardware mixer --"
-# The codec's 2-channel path misaligns TDM data; a native 4-channel stream is
-# clean. Also: no codec node has an amp, so "PCM Playback Volume" is an ALSA
-# softvol that PipeWire treats as hardware, producing a stepped volume curve.
-if [ "$DRY" -eq 1 ]; then
-  say "  [dry-run] would: write $WP forcing analog-surround-40 and soft-mixer"
-else
-  mkdir -p "$(dirname "$WP")"
-  cat > "$WP" <<'EOF'
-# Added by imac-audio-fix.
-# Force the codec's native 4-channel path: the 2-channel path misaligns TDM
-# data and only 2 of 4 channels play. Apple's format for this codec is
-# 0x4033 = S24_3LE, 4ch, 44.1 kHz.
-# Also mark the ALSA softvol as software: no codec node has an amp, so there is
-# no hardware volume and PipeWire would otherwise apply a stepped curve.
-# Refs: davidjo/snd_hda_macbookpro #211, #217.
-monitor.alsa.rules = [
-  { matches = [ { device.name = "~alsa_card.pci-0000_00_1f.3" } ]
-    actions = { update-props = {
-      device.profile      = "output:analog-surround-40+input:analog-stereo"
-      api.alsa.soft-mixer = true } } }
-  { matches = [ { node.name = "~alsa_output.pci-0000_00_1f.3.*" } ]
-    actions = { update-props = {
-      channelmix.upmix        = true
-      channelmix.upmix-method = "simple" } } }
-]
 EOF
-  ok "wrote $WP"
 
-  # The Apple crossover chain was built on the assumption that the layout was
-  # wrong. It is not the cause of the silence, and stacking it on the forced
-  # 4-channel path would double-filter, so set it aside (not deleted).
-  if [ -f "$CHAIN" ]; then
-    mv "$CHAIN" "$CHAIN.disabled-by-imac-audio-fix" \
-      && ok "set the Apple crossover chain aside (rename back with --undo)"
-  fi
-fi
-
-say ""
-say "=========================================================="
-if [ "$DRY" -eq 1 ]; then
-  say " DRY RUN. Nothing was changed. Re-run without --dry-run to apply."
-else
-  say " APPLIED. This script did NOT reboot, and will not."
-fi
-say ""
-[ "$DRY" -eq 1 ] || say " A reboot is required for the power_save change to take effect."
-say " When you are physically present:"
-say "   1. reboot"
-say "   2. sudo ~/bin/imac-audio-fix --check"
-say "   3. play something on ALL four internal speakers"
-say ""
-say " Expected in the check output:"
-say "   runtime PM disabled"
-say "   out-of-tree driver installed"
-say "   CS8409/CS42L83 in the codec dump"
-say "   4-channel PCM"
-say ""
-say " If still silent, report these three facts and we go next:"
-say "   - does the check say power_save=N ?"
-say "   - does /proc/asound/card0/codec#0 show the CS42L83 sub-codec?"
-say "   - with a 4ch stream, do channels 0 and 3 play and 1 and 2 stay silent?"
-say "=========================================================="
-exit 0
+exit 1

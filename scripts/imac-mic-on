@@ -1,0 +1,28 @@
+#!/bin/bash
+# Enable the CS8409 internal microphone's capture switch.
+#
+# Why: on every boot this codec comes up with 'Internal Mic Capture Switch'
+# = off,off, which makes PipeWire open the source and deliver pure silence.
+# Setting it by hand works, but it has to be redone every boot.
+#
+# The card number moves (the internal codec is card 1 once the Intel iGPU is
+# published, card 0 when it is not), so it is detected rather than hardcoded.
+set -u
+export PATH=/usr/sbin:/usr/bin:/sbin
+C=""
+# The codec can appear well after this runs (a user unit can start before the
+# HDA driver has probed), so wait for it rather than failing on the first miss.
+for attempt in $(seq 1 30); do
+  for c in 0 1 2 3 4; do
+    amixer -c "$c" contents 2>/dev/null | grep -q "Internal Mic Capture Switch" && { C=$c; break; }
+  done
+  [ -n "$C" ] && break
+  sleep 1
+done
+[ -n "$C" ] || { echo "imac-mic-on: no CS8409 codec found after waiting" >&2; exit 1; }
+amixer -c "$C" cset name="Internal Mic Capture Switch" on >/dev/null 2>&1
+amixer -c "$C" cset name="Internal Mic Capture Volume" 20,20 >/dev/null 2>&1
+amixer -c "$C" cset name="Internal Mic Boost Volume" 0,0 >/dev/null 2>&1
+amixer -c "$C" cset name="Digital Capture Volume" 60,60 >/dev/null 2>&1
+amixer -c "$C" cset name="Capture Source" 0 >/dev/null 2>&1
+echo "imac-mic-on: card $C, switch $(amixer -c $C contents 2>/dev/null | grep -A3 'Internal Mic Capture Switch' | grep ': values' | tr -s ' ')"

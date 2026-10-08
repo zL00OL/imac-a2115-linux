@@ -166,6 +166,40 @@ elif [ "$MAXW" -gt 0 ] 2>/dev/null; then warn "largest mode is ${MAXW}x${MAXH} -
 else unk "could not read connector modes"; fi
 
 #----------------------------------------------------------------- audio
+sec "Panel brightness"
+# The panel only responds when the kernel is booted acpi_backlight=video. The
+# default (native) registers amdgpu's backlight instead, which is type "raw",
+# writes successfully, and does nothing - so this reads as a hardware fault.
+# docs/brightness.md has the full story.
+if tr ' ' '\n' < /proc/cmdline | grep -q 'acpi_backlight=video'; then
+  ok "acpi_backlight=video on the kernel command line"
+else
+  no "acpi_backlight=video NOT set - the panel will not respond to brightness"
+  info "add it to the options line of both BLS entries (there is no /etc/default/grub here)"
+  info "see docs/brightness.md"
+fi
+PANEL=""
+for d in /sys/class/backlight/acpi_video*; do
+  [ -w "$d/brightness" ] || continue
+  m=$(cat "$d/max_brightness" 2>/dev/null)
+  [ "$m" != "100" ] && { PANEL=$d; break; }
+done
+if [ -n "$PANEL" ]; then
+  ok "panel backlight: $(basename "$PANEL") $(cat "$PANEL"/brightness)/$(cat "$PANEL"/max_brightness)"
+  info "max_brightness is the firmware's own table (89 levels, not 100) - a firmware cap"
+elif ls /sys/class/backlight/amdgpu_bl* >/dev/null 2>&1; then
+  no "only amdgpu_bl* present - these are the nodes the panel ignores"
+  info "boot with acpi_backlight=video"
+else
+  no "no backlight device at all"
+fi
+if [ -x /usr/local/bin/imac-brightness ] && [ -x /usr/local/libexec/imac-brightness-set ]; then
+  ok "brightness helpers installed"
+  info "KDE's slider works on its own; these are for an exact level and min/max"
+else
+  info "scripts/imac-audio --helpers installs the brightness helpers"
+fi
+
 sec "Audio - the codec path"
 DK=$(dkms status 2>/dev/null | grep -i macbookpro)
 if [ -n "$DK" ]; then
@@ -175,11 +209,24 @@ if [ -n "$DK" ]; then
     ok "a build exists for the running kernel"
   else
     warn "no DKMS build listed for $K - internal speakers may be silent"
-    info "sudo dkms install --force snd-hda-macbookpro/0.1 -k $K"
+    info "sudo scripts/imac-audio --install -k $K"
   fi
 else
   no "no DKMS codec registered - internal speakers will be silent"
   info "see docs/audio.md for the driver source and build guards"
+fi
+
+# The decisive audio check. The headset capture patch exports 10 module
+# parameters; an unpatched driver exports 0. Without it, EarPods capture is
+# digital silence even though speakers work fine.
+NP=$(ls /sys/module/snd_hda_codec_cs8409/parameters 2>/dev/null | wc -l)
+if [ "$NP" -ge 10 ]; then
+  ok "headset capture patch is loaded ($NP module parameters)"
+elif [ "$NP" -eq 0 ]; then
+  no "driver is UNPATCHED (0 parameters) - EarPods capture will be digital silence"
+  info "sudo scripts/imac-audio --install"
+else
+  warn "$NP module parameters - expected 10 if the headset patch is loaded"
 fi
 
 CSRC=$(cat /sys/module/snd_hda_codec_cs8409/srcversion 2>/dev/null)
@@ -225,7 +272,17 @@ info "these are open questions, not failures. Do not read them as passing."
 
 #------------------------------------------------------------- bootloader
 sec "Boot"
-BLS=/boot/efi/loader/entries
+# This machine has two EFI partitions. The BLS entries live on XBOOTLDR and the
+# ESP's entries directory is empty, so a hardcoded ESP path silently finds
+# nothing. Detect it once instead. See docs/recovery.md.
+ENTRYDIR=""
+for d in /boot/efi-xbootldr/loader/entries "$ENTRYDIR" \
+         /boot/efi/opensuse/loader/entries; do
+  [ -d "$d" ] || continue
+  if [ -n "$(ls -1 "$d"/*.conf 2>/dev/null)" ]; then ENTRYDIR=$d; break; fi
+  [ -z "$ENTRYDIR" ] && ENTRYDIR=$d
+done
+BLS="$ENTRYDIR"
 if [ -d "$BLS" ]; then
   ok "systemd-boot BLS entries present"
   S ls -1 "$BLS" 2>/dev/null | sed 's/^/         /' || info "entries not readable without root"

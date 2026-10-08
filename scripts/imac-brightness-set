@@ -1,0 +1,64 @@
+#!/bin/bash
+# Privileged half of imac-brightness. Writes one integer to the panel backlight.
+#
+# Separated out because sysfs attribute permissions cannot be changed by udev
+# (the kernel fixes them at creation and sysfs has no chmod), and setuid is
+# ignored on shell scripts. A sudoers rule grants NOPASSWD for THIS SCRIPT ONLY.
+#
+# The capability it grants is "set the screen brightness" - nothing more.
+#
+# Device choice matters. This machine exposes several backlight nodes and only
+# one of them drives the panel:
+#
+#   acpi_video0  firmware, 0..89   <- the panel. works.
+#   acpi_video1  firmware, 0..100  <- the IGPU, which has no panel attached.
+#   amdgpu_bl2   raw, 0..65535      <- accepts writes, the panel ignores them.
+#
+# The last one only exists when the kernel is NOT booted acpi_backlight=video;
+# in that mode the kernel logs 'Skipping amdgpu DM backlight registration'.
+# With the wrong node selected the write silently succeeds and the panel does
+# nothing, which is the symptom that made this look broken for so long.
+#
+# amdgpu_bl is demoted to last-resort on purpose. It was previously preferred,
+# which is why the brightness control appeared to work while changing nothing.
+# The acpi_video* nodes only exist because the kernel is booted with
+# acpi_backlight=video; in the default "native" mode amdgpu registers its own
+# backlight instead and the ACPI one is never created.
+set -u
+VAL=${1:-}
+case "$VAL" in
+  ''|*[!0-9]*) echo "usage: imac-brightness-set <0-65535>" >&2; exit 2 ;;
+esac
+
+pick() {
+  local d name max
+  # 1. a firmware backlight that is not the 0..100 generic one
+  for d in /sys/class/backlight/acpi_video*; do
+    [ -w "$d/brightness" ] || continue
+    max=$(cat "$d/max_brightness" 2>/dev/null) || continue
+    [ "$max" != "100" ] && { echo "$d"; return 0; }
+  done
+  # 2. any firmware backlight
+  for d in /sys/class/backlight/acpi_video*; do
+    [ -w "$d/brightness" ] && { echo "$d"; return 0; }
+  done
+  # 3. amdgpu_bl and friends - accepted but ineffective on this panel
+  for d in /sys/class/backlight/*; do
+    [ -e "$d" ] || continue
+    name=$(basename "$d")
+    case "$name" in
+      amdgpu_bl*|intel_backlight*|nvidia_wmi_ec_backlight*) [ -w "$d/brightness" ] && { echo "$d"; return 0; } ;;
+    esac
+  done
+  # 4. anything writable at all
+  for d in /sys/class/backlight/*; do
+    [ -w "$d/brightness" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+
+DEV=$(pick) || { echo "no usable backlight device" >&2; exit 1; }
+MAX=$(cat "$DEV/max_brightness")
+[ "$VAL" -le "$MAX" ] || VAL=$MAX
+echo "$VAL" > "$DEV/brightness" || exit 1
+cat "$DEV/brightness"

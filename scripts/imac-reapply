@@ -21,7 +21,8 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 #
 #   audio - the patched CS8409 codec must be rebuilt and reinstalled for every
 #           new kernel. Verified on the machine 2026-10-06: DKMS
-#           (snd-hda-macbookpro/0.1) is the working configuration and installs
+#           (snd_hda_macbookpro/0.2, jackdanyell + headset patch) is the
+#           working configuration and installs
 #           into updates/. See docs/audio.md.
 #   opencl- GPU compute for Resolve lives in a Flatpak runtime whose hashed
 #           path changes on every runtime update. The ICD file is repointed
@@ -59,6 +60,18 @@ sel()  { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 say "=== imac-reapply $(date -Is)  mode=$([ $CHECK -eq 1 ] && echo check || echo apply) ==="
 [ "$(id -u)" -eq 0 ] || { say "must run as root: sudo ~/bin/imac-reapply"; exit 1; }
 
+
+# This machine has two EFI partitions. The BLS entries live on XBOOTLDR and the
+# ESP's entries directory is empty, so a hardcoded ESP path silently finds
+# nothing. Detect it once instead. See docs/recovery.md.
+ENTRYDIR=""
+for d in /boot/efi-xbootldr/loader/entries "$ENTRYDIR" \
+         /boot/efi/opensuse/loader/entries; do
+  [ -d "$d" ] || continue
+  if [ -n "$(ls -1 "$d"/*.conf 2>/dev/null)" ]; then ENTRYDIR=$d; break; fi
+  [ -z "$ENTRYDIR" ] && ENTRYDIR=$d
+done
+
 #--------------------------------------------------------------------- kernel
 if sel kernel; then
 say ""; say "[kernel]"
@@ -73,10 +86,10 @@ CUR=$(uname -r)
 installed_kernels() {
   local out v
   out=$(awk '/^version[[:space:]]/ { v=$2; sub(/^[^@]*@/, "", v); if (v != "") print v }' \
-         /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+         "$ENTRYDIR"/*.conf 2>/dev/null | sort -uV)
   if [ -z "$out" ]; then
     out=$(awk '/^linux[[:space:]]/ { for (i=2;i<=NF;i++) if ($i ~ /^\//) { n=split($i,a,"/"); print a[n-1] } }' \
-           /boot/efi/loader/entries/*.conf 2>/dev/null | sort -uV)
+           "$ENTRYDIR"/*.conf 2>/dev/null | sort -uV)
   fi
   if [ -n "$out" ]; then
     for v in $out; do [ -d "/lib/modules/$v" ] && printf '%s\n' "$v"; done
@@ -95,7 +108,7 @@ elif echo "$K" | grep -qx "$CUR"; then
   say "    the patched audio codec and the 5K initrd are per-kernel."
   say "    DKMS rebuilds the codec by itself; confirm a build exists for $NEWEST:"
   say "      dkms status | grep macbookpro"
-  say "    If it does not:  sudo dkms install --force snd-hda-macbookpro/0.1 -k $NEWEST"
+  say "    If it does not:  sudo scripts/imac-audio --install -k $NEWEST"
   say "    After reboot verify: tiled 5K output, then audio."
 else
   warn "running $CUR is not among installed: $(echo "$K" | tr '\n' ' ')"
@@ -110,11 +123,11 @@ if sel esp; then
 say ""; say "[esp]"
 AVAIL=$(df -m --output=avail /boot/efi 2>/dev/null | tail -1 | tr -d ' ')
 say "  free: ${AVAIL}M on /boot/efi"
-OLD=$(ls -1 /boot/efi/loader/entries/ 2>/dev/null | grep -cE 'opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$')
+OLD=$(ls -1 "$ENTRYDIR"/ 2>/dev/null | grep -cE 'opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$')
 say "  old snapper BLS entries: $OLD"
 if [ "${AVAIL:-0}" -lt 60 ]; then
   warn "too tight for a kernel update; prune first:"
-  say "    sudo rm -f /boot/efi/loader/entries/opensuse-slowroll-*-{70..99}.conf"
+  say "    sudo rm -f "$ENTRYDIR"/opensuse-slowroll-*-{70..99}.conf"
 elif [ "${AVAIL:-0}" -lt 100 ]; then
   warn "tight; a kernel update may fail"
 else
@@ -155,12 +168,15 @@ fi
 
 # --- codec module: this is what actually decides whether speakers work ---
 if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
-  # Not a fault. Confirmed on the machine 2026-10-06: dkms status reports
-  # snd-hda-macbookpro/0.1 installed, and the loaded snd_hda_codec_cs8409 IS
-  # that DKMS build (srcversion 5957235DD0C11693189E2C5). Expecting its absence
-  # here would flag a correctly configured machine.
-  ok "davidjo DKMS driver registered - this is the working codec configuration"
-  hint "sudo dkms remove snd_hda_macbookpro/0.2 --all   # DKMS cannot win module ordering"
+  # Not a fault. The loaded snd_hda_codec_cs8409 IS this DKMS build. Expecting
+  # its absence here would flag a correctly configured machine.
+  #
+  # The package is jackdanyell's tree at 0.2, built with the headset capture
+  # patch. It is the correct codec for this machine. An earlier version of this
+  # script named it as the wrong fork and told you to remove it; that was
+  # backwards and would have disabled headset capture.
+  ok "CS8409 DKMS codec registered - this is the working codec configuration"
+  hint "scripts/imac-audio --check    # confirms the headset patch is actually loaded"
 fi
 RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
 say "  cs8409 module: ${RESOLVED:-not found}"
@@ -168,16 +184,15 @@ case "$RESOLVED" in
   */updates/*) ok "patched DKMS codec active via updates/" ;;
   "")          bad "no cs8409 module found" ;;
   *)           warn "the in-tree codec wins, not the DKMS build"
-               hint "sudo dkms install --force snd-hda-macbookpro/0.1" ;;
+               hint "sudo scripts/imac-audio --install" ;;
 esac
-# Check DKMS directly instead of delegating to scripts/imac-audio-module
-# --check, which inspected the ext01 layout that DKMS beats. That script is
-# SUPERSEDED; the codec path is DKMS. See docs/audio.md.
+# Check DKMS directly. scripts/imac-audio-module is retired; it inspected an
+# ext01 layout that DKMS beats. See scripts/imac-audio and docs/audio.md.
 if dkms status 2>/dev/null | grep -qi macbookpro; then
   dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/  /'
 else
   warn "no DKMS codec registered for the CS8409"
-  hint "sudo dkms install --force snd-hda-macbookpro/0.1   # see docs/audio.md"
+  hint "sudo scripts/imac-audio --install   # see docs/audio.md"
 fi
 
 # --- PipeWire routing ---
@@ -203,12 +218,12 @@ say ""; say "[boot]"
 DEF=$(awk '/^default[[:space:]]/{print $2; exit}' /boot/efi/loader/loader.conf 2>/dev/null)
 TMO=$(awk '/^timeout[[:space:]]/{print $2; exit}' /boot/efi/loader/loader.conf 2>/dev/null)
 say "  default: ${DEF:-unset}  timeout: ${TMO:-unset}s"
-if [ -n "$DEF" ] && [ -f "/boot/efi/loader/entries/$DEF" ]; then
+if [ -n "$DEF" ] && [ -f ""$ENTRYDIR"/$DEF" ]; then
   ok "default entry exists"
   # BLS paths are ESP-relative (no /boot/efi prefix), so resolve them there.
   miss=0
   for p in $(awk '/^(linux|initrd)[[:space:]]/{for(i=2;i<=NF;i++) if($i ~ /^\//) print $i}' \
-             "/boot/efi/loader/entries/$DEF"); do
+             ""$ENTRYDIR"/$DEF"); do
     if [ -e "/boot/efi$p" ]; then say "    ok $p"
     else warn "MISSING $p"; miss=1; fi
   done
@@ -217,7 +232,8 @@ else
   bad "default entry missing or unparsable"
 fi
 say "  theme: $(awk -F= '/^Theme/{print $2; exit}' /etc/plymouth/plymouthd.conf 2>/dev/null)"
-say "  untested: Plymouth has never rendered on the tiled 5K panel"
+say "  known: Plymouth cannot render here - amdgpu needs ~5.2s of firmware" \
+    "load before the stitched panel exists. Entries omit rd.plymouth."
 
 fi
 say ""
