@@ -1,12 +1,22 @@
 # Audio: the CS8409 codec and the internal speakers
 
-> **Status: MIXED — read the per-section labels.**
-> The DKMS verdict is **VERIFIED** by measurement on the reference machine: the
-> loaded `snd_hda_codec_cs8409` *is* the `snd-hda-macbookpro/0.1` DKMS build.
-> The `updates/ext01` approach is **SUPERSEDED** and lost the codec bind here.
-> The 4-channel `analog-surround-40` enumeration is **BROKEN**; the 2-channel
-> `analog-stereo` enumeration is the working one. Do not read one section's
-> verdict as applying to the file.
+> **Status: three separate faults, each with its own fix. Read the labels.**
+>
+> - **Headset (EarPods) capture: FIXED** — required
+>   `cs8409-headset-capture.patch` on top of the jackdanyell tree. It was
+>   digital silence before. See
+>   [Headset (EarPods) microphone](#headset-earpods-microphone--fixed-2026-10-07).
+>   Confirm a patched module with
+>   `ls /sys/module/snd_hda_codec_cs8409/parameters | wc -l` → **10**.
+> - **Internal mic level: FIXED** — was clipping at −0.0 dBFS; needs
+>   `Internal Mic Capture Volume` 20,20 and `Internal Mic Boost Volume` 0,0.
+> - **PipeWire capture on kernel 7.2.7: OPEN** — `arecord` works on both
+>   kernels, PipeWire only on 7.2.2. The driver's routing is provably correct;
+>   the fault is downstream. See the section above for the evidence.
+> - **Internal speakers: FIXED** — `power_save=0` plus the DKMS driver. The
+>   4-channel `analog-surround-40` enumeration is **BROKEN**; `analog-stereo`
+>   is the working one. WirePlumber reverts to the 4-channel profile often
+>   enough that this needs re-checking after any audio daemon restart.
 
 This repository covers two things: the seamless tiled 5K display, and the
 internal audio. This page is the audio half — how the Apple CS8409 codec is
@@ -23,9 +33,239 @@ Everything here was measured on openSUSE **Slowroll** (see
 
 | Section | |
 |---|---|
+| [Headset (EarPods) microphone](#headset-earpods-microphone--fixed-2026-10-07) | capture that was silent for a day |
+| [Internal microphone level](#internal-microphone-level--fixed-2026-10-07) | a gain control that clipped at 0 dBFS |
+| [Turning the driver's logging on](#turning-the-drivers-logging-on--the-diagnostic-that-finally-worked) | `MYSOUNDDEBUG`, and why `dmesg` as a normal user lies |
 | [Audio — FIXED](#audio--fixed-tweeters--woofers-verified-2026-10-03) | the working configuration |
 | [Audio: earlier diagnosis](#audio-earlier-diagnosis-kept-for-the-record) | superseded, kept for the record |
 | [Internal speakers](#internal-speakers--what-actually-works-and-why-the-eq-cannot-be-applied) | the 4-channel fault, and why the EQ stays parked |
+
+---
+
+## Headset (EarPods) microphone — FIXED, 2026-10-07
+
+> **Outcome:** capture from a 4-pole (TRRS) headset is confirmed working —
+> peak −10.3 dBFS, 99% non-zero samples, 0% clipped. It was digital silence
+> before. **This was a driver bug, not a mixer setting, and not a PipeWire
+> problem.** Every ALSA-level change tried beforehand had no effect, which is
+> what finally pointed at the driver.
+
+### The bug
+
+The stock `jackdanyell` tree binds the capture DMA to the **internal** mic ADC
+but configures the **headset** mic, or the reverse — so with a headset plugged
+in the stream is fed by an ADC that has nothing connected to it. Result:
+`peak 0.00000`, a running PCM, and total silence. From the patch's own
+header:
+
+> On plug-in `cs_8409_capture_pcm_prepare` branches on `have_mike` and routes
+> the headset mic (pin `0x3c`) to the cs42l83 ADC `0x1a` — but the PCM stays
+> bound to `intmike_adc_nid` (0x23). **Nothing feeds 0x23, so capture is digital
+> silence: peak 0.00000 with a headset in**, while the internal mike alone
+> worked fine.
+
+Two further defects in the same driver: a plug/unplug that happens while a
+capture stream is already open does nothing at all (`PLUGIN WHILE CAPTURING
+UNIMPLEMENTED`), and the internal mic gain is pinned to a constant that is 24 dB
+below where it needs to be.
+
+### The fix
+
+`ahmadtv/omarchy-imac18-3` carries
+[`patches/cs8409-headset-capture.patch`](../patches/cs8409-headset-capture.patch),
+written against **jackdanyell/imac18-3-cs8409-linux-audio at commit
+`be90113`**. It adds six module parameters, which is how you confirm it is
+actually loaded:
+
+```
+headset_buttons=1  headset_mike_boost=1  headset_mike_gain=12
+hp_hold_on_capture=Y  intmike_gain=51  button_debounce_ms=80
+button_long_press_ms=300  button_max_hold_ms=3000
+int_drain_max=40  int_drain_burst=24
+```
+
+An unpatched module exposes **none** of these. That is the single fastest check:
+
+```bash
+ls /sys/module/snd_hda_codec_cs8409/parameters | wc -l    # 0 = unpatched, 10 = patched
+```
+
+Verify a capture:
+
+```bash
+pw-record ~/mic.wav      # then play it back
+# expect: peak well above -60 dBFS, non-zero samples
+```
+
+Expected from the reference machine: **−10.3 dBFS peak, 99% non-zero, 0%
+clipped.** The patch's own measurement target is −21.7 dBFS RMS with −8.9 dBFS
+peaks, so anything near that is correct.
+
+### The patch lives in the driver tree, not in this repository
+
+`cs8409-headset-capture.patch` is not vendored here. It applies to a tree that
+DKMS builds, and shipping a copy that can drift from `be90113` is worse than
+pinning the upstream commit:
+
+```
+upstream: https://github.com/jackdanyell/imac18-3-cs8409-linux-audio
+commit:   be90113a7638eb264b2ff5acfe888cd72c8364c6
+patch:    https://github.com/ahmadtv/omarchy-imac18-3/blob/master/patches/cs8409-headset-capture.patch
+```
+
+Apply in that order — the patch's hunks are written against `be90113` and will
+not apply cleanly elsewhere.
+
+### Building it without a 155 MB download
+
+`jackdanyell`'s installer wants to download `linux-<ver>.tar.xz` from
+`cdn.kernel.org`. That download **stalled permanently at 14%** on the reference
+machine. It is not needed:
+
+- `/usr/src/linux-7.2.7-1` is a **complete** source tree (94,376 files, full
+  `sound/hda`, 307 amdgpu `.c` files).
+- The openSUSE-shipped `/usr/src/linux-7.2.2-1` is **stripped** — 16,672 files
+  and `sound/hda` reduced to 19 stub `Kconfig`/`Makefile` files.
+
+So `sound/hda` can be taken from the 7.2.7 tree and built against either
+kernel's headers. Satisfy the installer with a locally staged tarball whose
+top-level directory matches what its `tar` expects:
+
+```bash
+S=/usr/src/snd_hda_macbookpro-0.2
+mkdir -p $S/build /tmp/stage/linux-$(uname -r | cut -d- -f1)
+cp -a /usr/src/linux-7.2.7-1/sound /tmp/stage/linux-$(uname -r | cut -d- -f1)/
+tar -cJf $S/build/linux-$(uname -r | cut -d- -f1).tar.xz \
+    -C /tmp/stage linux-$(uname -r | cut -d- -f1)/sound/hda
+```
+
+Note the internal version is `7.2.2`, not `7.2.2-1-default` — `kernel_version`
+in the installer is `uname -r` cut on the first `-`. Getting this wrong yields
+`tar: Cannot open: No such file or directory`, which looks like a corrupt
+tarball rather than a naming mistake.
+
+### Kernel 7.2.7: the driver is correct but PipeWire still gets silence
+
+With the patched driver, **`arecord` works on both kernels but PipeWire works
+only on 7.2.2.** The driver's own logging confirms it routes correctly on
+7.2.7:
+
+```
+cs_8409_capture_pcm_prepare: NID=0x23, stream=0x1, format=0x4041
+cs_8409_capture_pcm_prepare: capture nid 0x23 -> 0x1a (jack 1 mike 1)
+headset_mike_adc_level: boost 1 gain 12 dB (0x1d01 0x01 0x1d03 0x0c)
+```
+
+`jack 1 mike 1` and the switch to ADC `0x1a` are exactly right. The ALSA layer
+is equally innocent — while a PipeWire capture runs:
+
+```
+/proc/asound/card1/pcm0c/sub0/   status: RUNNING
+  access: MMAP_INTERLEAVED   format: S32_LE   channels: 2   rate: 44100
+```
+
+Identical to the `arecord` capture that yields −1.3 dBFS, yet PipeWire receives
+zeros. `arecord` in RW, MMAP, MMAP-with-explicit-buffers and `plughw` modes all
+work, so access type is not the variable. The open question is PipeWire's
+repeated stream re-open: the debug log shows `cs_8409_capture_pcm_prepare`
+blocks recurring, and each one re-drives the codec over I2C. Suspected race,
+not yet proven.
+
+**Until that is resolved, boot the 7.2.2 fallback entry when you need the
+microphone** — `arecord`/`parecord` work on both kernels, but PipeWire-native
+applications (OBS, browsers, Discord) need 7.2.2.
+
+## Internal microphone level — fixed 2026-10-07
+
+The internal mic came up **clipping**: peak −0.0 dBFS, RMS −23.7 dBFS. Full-scale
+peaks are not a microphone signal. Setting the gain nodes directly fixes it:
+
+| Control | Clipping | Working |
+|---|---|---|
+| `Internal Mic Capture Volume` | 63,63 | **20,20** |
+| `Internal Mic Boost Volume` | 2,2 | **0,0** |
+
+Result: **peak −28.2 dBFS, RMS −48.3 dBFS, 0% clipped.**
+
+The patched driver adds `intmike_gain` (default `0x33`, i.e. 0 dB) as the ADC
+gain used before the mixer control exists. Once `Internal Mic Capture Volume`
+is present the control owns the amp, which is what makes the above work.
+
+Note the asymmetry in what each number does: the headset mic needs all its
+available digital gain (`headset_mike_boost=1` plus `headset_mike_gain=12`,
++32 dB combined) because the EarPods element is 31 dB quieter than the internal
+one. The internal mic needs almost none.
+
+`scripts/imac-verify` checks both.
+
+## Turning the driver's logging on — the diagnostic that finally worked
+
+The driver has a full set of debug printfs that are **compiled out by
+default**, which is why a capture attempt can be completely silent in the log
+and look like "the driver is not involved":
+
+```c
+#ifdef MYSOUNDDEBUGFULL
+        ... logging on
+#else
+#define mycodec_info(...)
+#define myprintk(...)
+#endif
+```
+
+The file that carries the switch is `patch_cirrus/patch_cirrus_apple.h` (pulled
+in by `patch_cs8409.c`). Define it there, rebuild, and you get the whole
+capture path:
+
+```bash
+sed -i '0,/^#ifdef MYSOUNDDEBUGFULL/s//#define MYSOUNDDEBUG 1\n#ifdef MYSOUNDDEBUGFULL/' \
+    /usr/src/snd_hda_macbookpro-0.2/patch_cirrus/patch_cirrus_apple.h
+dkms remove -m snd_hda_macbookpro -v 0.2 --all
+dkms add -m snd_hda_macbookpro -v 0.2
+dkms build -m snd_hda_macbookpro -v 0.2 -k 7.2.7-1-default
+dkms install -m snd_hda_macbookpro -v 0.2 -k 7.2.7-1-default --force
+```
+
+Rebuild the initramfs too, or the old module loads from it.
+
+**Turn it back off afterwards.** The logging is extremely verbose — 121,000
+lines per minute of wall clock on the reference machine, enough to fill a
+journal in minutes.
+
+### `dmesg` as a normal user returns nothing, silently
+
+This invalidated four measurements before it was caught. `dmesg` needs root,
+and `2>/dev/null` turns the permission error into an empty result that is
+indistinguishable from "the driver printed nothing":
+
+```bash
+sudo dmesg | wc -l              # real count
+dmesg 2>/dev/null | wc -l       # 0, every time, as a normal user
+```
+
+Any "the driver logged nothing" conclusion reached from a script running as a
+user is worthless. If you need kernel output from a user-level script, snapshot
+it from a root process:
+
+```bash
+# as root
+for i in $(seq 1 60); do dmesg >> /var/tmp/dmesg-snap.txt; sleep 1; done &
+# as the user, trigger the capture, then read /var/tmp/dmesg-snap.txt
+```
+
+`journalctl -k` has the same problem for non-root.
+
+### Card numbering moves
+
+The internal codec is card **0 or 1** depending on whether the Intel iGPU is
+published, because publishing it changes enumeration order. Never hardcode
+`hw:1,0`. Detect it:
+
+```bash
+for c in 0 1 2 3; do
+  amixer -c $c contents 2>/dev/null | grep -q "Internal Mic Capture Switch" && { C=$c; break; }
+done
+```
 
 ## Audio — FIXED (tweeters + woofers), verified 2026-10-03
 
@@ -252,7 +492,7 @@ non-problem.
 | Attempt | Outcome |
 |---|---|
 | Unity-gain PipeWire chain, ALSA levels to 100% | No effect on the fault |
-| jackdanyell v0.2 (`imac18-3-cs8409-linux-audio`) | Wrong model; targets iMac18,3 |
+| jackdanyell v0.2 (`imac18-3-cs8409-linux-audio`) | **WRONGLY DISMISSED — this is the fix.** See "Headset (EarPods) microphone" below. The row used to read "Wrong model; targets iMac18,3"; that was incorrect and cost a day |
 | DKMS install of that fork | No PCM devices registered |
 | Hand-built module in `updates/ext01` | `disagrees about version of symbol module_layout` — `vermagic` matched, so the guard missed it. The tree had a different `.config` (`module_layout` CRC `0x60b44b0b` vs the real `0xbb7f52aa`) |
 | `updates/ext01` ordering theory | Built on issue #2 vs #3; likely a red herring (see above) |

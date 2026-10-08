@@ -14,6 +14,131 @@ and tells you which section below applies.
 
 ---
 
+## Kernel 7.2.7 and later: no patch needed at all
+
+> **Verified 2026-10-07 on the reference machine.** Upstream `amdgpu` gained
+> native `tiled_stitch` support between 7.2.2 and 7.2.7. On 7.2.7 the
+> distribution's shipped module does **not** have it — the SUSE
+> `kernel-default-7.2.7-1.1` binary module builds without it — but the source
+> tree does. Build `amdgpu.ko` from `/usr/src/linux-7.2.7-1` and the seam is
+> fixed with no out-of-tree patch of any kind.
+
+```c
+// drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c, 7.2.7
+int amdgpu_tiled_stitch = -1; /* auto */
+module_param_named(tiled_stitch, amdgpu_tiled_stitch, int, 0444);
+
+bool amdgpu_dm_has_tiled_stitch_panel(struct amdgpu_device *adev);
+```
+
+The 7.2.2-era patches in `patches/amdgpu-5k/` remain necessary for 7.2.2 and
+earlier. **Check before applying them:**
+
+```bash
+grep -c tiled_stitch /usr/src/linux-$(uname -r | cut -d- -f1)-1/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+# 0  -> this kernel needs the out-of-tree patch
+# >0 -> this kernel has it upstream; rebuild amdgpu from source instead
+```
+
+### It works differently, and that is the better behaviour
+
+The out-of-tree patch presents **two connectors** (`eDP-1` and `DP-1`), each
+showing half the picture, stitched by the compositor. Upstream instead
+synthesises a **single stitched EDID** and exposes only one connector:
+
+```
+TILED_STITCH: synthesized root EDID for eDP-1 from source vendor=06 10
+              product=0xae26 name="iMac" mode 5120x2880 clock=966500
+TILED_STITCH: exposed only stitched mode 5120x2880 on eDP-1 (tile 2560x2880)
+TILED_STITCH: kept synthesized stitched mode 5120x2880 on eDP-1 (tile 2560x2880)
+```
+
+Consequences when diagnosing on 7.2.7:
+
+- **`DP-1` will report `disconnected` and that is correct.** There is only one
+  connector. Do not chase it.
+- Section 3 (comparing the two connectors' EDIDs) does not apply; there is one.
+- The seam cannot exist in the same way, because the kernel is presenting a
+  single logical display rather than asking the compositor to align two.
+
+### `tiled_stitch` is read-only and cannot be switched at runtime
+
+```c
+module_param_named(tiled_stitch, amdgpu_tiled_stitch, int, 0444);
+```
+
+Mode `0444` means read-only for *everyone* — `/sys/module/amdgpu/parameters/tiled_stitch`
+is `-r--r--r--` and not writable even as root. The stitched EDID is synthesised
+once during connector probe, not per-modeset, so **"boot untiled and stitch
+later" is not possible.** It is a boot-time decision only.
+
+### The sysfs readback question, resolved
+
+The note below asks whether `tiled_stitch` is `bool` or `int`. Upstream 7.2.7
+declares it as **`int`**, so it reads back verbatim and the command line and
+sysfs agree:
+
+```
+$ grep tiled_stitch /proc/cmdline
+amdgpu.tiled_stitch=-1
+$ cat /sys/module/amdgpu/parameters/tiled_stitch
+-1
+```
+
+The earlier contradiction came from the out-of-tree patch, which used a
+different type. On a patched 7.2.2 kernel the sysfs value is not authoritative.
+
+### `amdgpu` takes about 8 seconds to initialise
+
+Loading Polaris firmware dominates, and it has a direct consequence:
+
+```
+[2.2s]  efidrm (EFI framebuffer)
+[2.8s]  Plymouth starts
+[8.1s]  amdgpu initialised, stitched EDID exposed
+```
+
+Any boot splash has under a second of usable display. Plymouth cannot be made
+to show on this machine for this reason alone — see
+[`docs/recovery.md`](recovery.md#plymouth-cannot-display-here).
+
+### Building the 7.2.7 module
+
+The module is large; strip it or the initramfs becomes unwieldy:
+
+```bash
+cd /usr/src/linux-7.2.7-1
+make O=/usr/src/linux-7.2.7-1-obj/x86_64/default \
+     M=drivers/gpu/drm/amd/amdgpu modules -j"$(nproc)"
+objcopy --strip-debug drivers/gpu/drm/amd/amdgpu/amdgpu.ko /tmp/amdgpu.ko
+zstd -19 -f /tmp/amdgpu.ko -o /usr/lib/modules/7.2.7-1-default/updates/amdgpu.ko.zst
+depmod -a 7.2.7-1-default
+```
+
+787 MB unstripped → 32.8 MB stripped → **5.0 MB compressed**. Install it into
+`updates/` and depmod; then it must also be in the initramfs, or the initramfs
+copy wins at boot.
+
+If `/usr/src` is read-only — which it is on a snapper snapshot other than the
+one you built in — use an overlay instead of copying ~1.4 GB:
+
+```bash
+mkdir -p /var/tmp/src-ovl/{upper,work,merged}
+mount -t overlay overlay \
+  -o lowerdir=/usr/src,upperdir=/var/tmp/src-ovl/upper,workdir=/var/tmp/src-ovl/work \
+  /var/tmp/src-ovl/merged
+```
+
+### The log burst is a 10-second boot-time burst
+
+Upstream logs one line per modeset. Measured on the reference machine: **242
+lines, all within the first 10 seconds, then zero** for the rest of the boot
+and afterwards. It is not a modeset loop and not a power problem. Anything that
+keeps Plymouth or the console hidden covers it; a journal cap is enough for
+the rest.
+
+---
+
 > [!NOTE]
 > **The `sysfs` readback for `tiled_stitch` is unverified.** The kernel command
 > line is the authoritative value on this machine: `amdgpu.tiled_stitch=-1`.

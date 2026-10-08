@@ -306,10 +306,135 @@ It is not. `/sys/module/amdgpu/srcversion` is the truth.
 
 ---
 
+## There are two EFI partitions, and the one you are editing may be ignored
+
+This machine has both a standard ESP and an XBOOTLDR, and a kernel update
+repopulates them differently:
+
+| Partition | Mount | Holds |
+|---|---|---|
+| `/dev/nvme0n1p1` (ESP) | `/boot/efi` | snapper-generated BLS entries, ~197 MB, **can fill up** |
+| `/dev/nvme0n1p3` (XBOOTLDR) | `/boot/efi-xbootldr` | hand-built entries and initramfs, 8 GB |
+
+Custom 5K entries normally live on **XBOOTLDR**. That is where there is room —
+an initramfs of ~85 MB does not fit in what remains of a 197 MB ESP once a
+kernel update has taken 92 MB of it.
+
+**The trap that cost a boot:** firmware boots the ESP, so systemd-boot reads
+its `loader.conf` — not XBOOTLDR's. An entry sorted first on XBOOTLDR is
+irrelevant if the ESP's `loader.conf` names a snapper entry. Symptoms are a
+reboot landing in a snapshot you did not choose, with a read-only `/etc`.
+
+Set the default in **both** files:
+
+```bash
+for P in /boot/efi /boot/efi-xbootldr; do
+  printf 'timeout 30\ndefault %s.conf\nconsole-mode max\n' ENTRY > $P/loader/loader.conf
+done
+```
+
+Also **do not rely on `default` alone.** Set `sort-key` so the intended entry
+sorts first, because a `default` naming an entry that does not exist is
+silently ignored:
+
+```bash
+sort-key aaa-<your-entry>     # sorts before the snapper-* keys
+```
+
+A kernel update rewrites ESP entries and can leave `loader.conf` pointing at a
+deleted file. Symptom: the machine boots a snapshot you did not select.
+
+## Snapper snapshots other than your working one have a read-only `/etc`
+
+On the reference machine, snapshot 121 (the one a kernel update creates) has
+**`/etc` and `/usr` read-only**, while `/var`, `/tmp`, `/home` and `/usr/local`
+stay writable because they are separate subvolumes.
+
+Everything system-wide then fails in a way that looks like a permissions
+problem:
+
+```
+Failed to mask unit: File /etc/systemd/system/sleep.target: Read-only file system
+touch /etc/x -> Read-only file system
+depmod: ERROR: ... /lib/modules/7.2.7-1-default ... Read-only file system
+```
+
+Only `/usr/local`, `/var`, `/tmp` and `/home` accept writes. Check before
+concluding a fix failed:
+
+```bash
+findmnt -no TARGET,OPTIONS /etc /usr /var 2>/dev/null
+```
+
+If you have booted the wrong snapshot, **reboot rather than repair it** —
+there is nothing to fix, the snapshot is simply not your working root. Confirm
+with `findmnt -no SOURCE /`; the working root here is `@/.snapshots/1/snapshot`.
+
+This also means DKMS installs and `depmod` cannot add modules for the kernel
+you are running from such a snapshot. The modules must already be in its tree,
+or the initramfs must carry them.
+
+## Plymouth cannot display here
+
+Not a misconfiguration, and not worth further attempts without reading
+[`docs/tiled-5k.md`](tiled-5k.md#amdgpu-takes-about-8-seconds-to-initialise).
+
+```
+[2.2s]  efidrm (EFI framebuffer)
+[2.8s]  Plymouth starts
+[8.1s]  amdgpu initialised — the real panel finally exists
+[~11s] Plymouth starts again (system phase)
+[14.5s] Plymouth terminates when the display manager starts
+```
+
+Plymouth runs for about 3.8 s with a usable display, and the panel needs ~5.2 s
+of Polaris firmware loading before that exists. It works on a stock
+initramfs, because there Plymouth falls back to the EFI framebuffer — but that
+combination does not tile, so it is not a useful trade.
+
+`rd.driver.blacklist=efi-framebuffer` is not honoured for DRM drivers;
+`modprobe.blacklist=` is **not a kernel parameter** (the kernel takes
+`module_blacklist=`). Neither changes the outcome. If Plymouth is enabled and
+you want the boot seconds back, remove `rd.plymouth=1` from the entry.
+
+## A keep-awake inhibitor can silently block rebooting
+
+This one presents as "reboot does nothing", which is very hard to connect to
+its cause. The command that looks like it failed:
+
+```
+$ systemctl reboot
+Call to Reboot failed: Operation denied due to active block inhibitor
+```
+
+`systemd-inhibit --what=idle:sleep:shutdown` blocks **shutdown and reboot** as
+well as sleep. To prevent idle suspend without preventing a deliberate reboot:
+
+```bash
+ExecStart=/usr/bin/systemd-inhibit --what=idle:sleep \
+  --who=imac-keep-awake --why="..." sleep infinity
+```
+
+Check for the culprit before anything else when a reboot appears to do nothing:
+
+```bash
+systemd-inhibit --list
+systemctl status imac-keep-awake.service
+```
+
+Note also that `systemd-run --on-active=2 systemctl reboot` and a backgrounded
+`(sleep 2; systemctl reboot)` both appear to succeed while leaving the machine
+running, because the unit's failure is easy to miss in the output. Check
+`journalctl -u <unit>` if a scheduled reboot does not happen.
+
+---
+
 ## Related
 
 - `docs/kernel-updates.md` — building a patched initramfs for a new kernel
 - `docs/tiled-5k.md` — tiling diagnostics and the three failure modes
 - `docs/troubleshooting.md` — display problems that are not emergencies
+- `docs/brightness.md` — the panel brightness control path, and why it is blocked
+- `docs/audio.md` — the CS8409 codec, headset capture, and `dmesg` permissions
 - `patches/amdgpu-5k/README.md` — patch provenance and apply order
 - `scripts/check-5k.sh` — read-only diagnostic; safe to run at any time
