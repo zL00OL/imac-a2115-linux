@@ -10,33 +10,25 @@ UNTESTED in the page that discusses it.
 
 | | |
 | --- | --- |
-| **Machine** | iMac 19,1 / A2115 (27-inch, 2019) — **VERIFIED** |
+| **Machine** | iMac 19,1 / A2115 (27-inch, 2019), firmware 2094.80.5.0.0 — **VERIFIED** |
 | **CPU** | Intel Core i5-8500 — **VERIFIED** |
-| **GPU** | AMD Ellesmere (`polaris10`), 4 GiB — see note below |
-| **Distro** | openSUSE Slowroll — **VERIFIED** |
-| **Kernel** | 7.2.2-1-default — **VERIFIED** |
-| **Mesa** | 26.2.2 — **VERIFIED** |
-| **Desktop** | KDE Plasma on Wayland — **VERIFIED** |
+| **GPU** | Radeon RX 570X (Ellesmere, `polaris10`, 4 GiB), subsystem Apple `[106b:019e]` — **VERIFIED** |
+| **iGPU** | Intel UHD 630 `8086:3e92` at `00:02.0`, `i915` bound — **VERIFIED** |
+| **RAM / storage** | 31 GiB; Samsung SSD 990 PRO 2 TB + HP P900 1 TB USB — **VERIFIED** |
+| **Distro** | openSUSE Tumbleweed-Slowroll — **VERIFIED** |
+| **Kernel** | 7.2.7-1-default — **VERIFIED** |
+| **Desktop** | KDE Plasma 6 on Wayland — **VERIFIED** |
 | **Display** | 5120×2880 seamless, `amdgpu.tiled_stitch=-1` — **VERIFIED** |
-| **Audio codec** | DKMS `snd-hda-macbookpro/0.1` — **VERIFIED** |
+| **Audio codec** | DKMS `snd-hda-macbookpro/0.2` — **VERIFIED** |
 | **Internal speakers** | 2-channel `analog-stereo` — **VERIFIED** |
+| **Hardware encode** | iGPU H.264/HEVC/VP8 via VA-API on `renderD129` — **VERIFIED** |
 
-**GPU marketing name, deliberately not asserted.** This repository only ever
-recorded the ASIC: "Radeon RX 580 (`polaris10`)" in this file, and
-"Radeon RX 470-580 family (`polaris10`)" in `docs/hardware.md`. Those are chip
-*family* descriptions, not the card's actual model name, and they are therefore
-not precise enough to serve as a reference line.
+The machine previously ran `7.2.2-1-default`. Moving to 7.2.7 was significant:
+`amdgpu.tiled_stitch` is upstream there, so two of the six vendored 5K patches
+are now obsolete. `docs/tiled-5k.md` has the per-patch status.
 
-The iMac19,1 27-inch shipped with a Radeon Pro 570X, which is the expected
-answer — but "expected" is not "verified", so this table says Ellesmere and
-leaves the name open rather than guessing. Settle it from the PCI ID:
-
-```bash
-lspci -nnk | grep -A3 -iE 'vga|display'
-```
-
-**Full machine details** — firmware, Mesa build, KDE version, initramfs
-generator, kernel command line, patch commit and hashes, `dkms` version — are in
+**Full machine details** — firmware, board id, KDE version, initramfs generator,
+kernel command line, per-patch status, `dkms` version — are in
 `docs/reference-system.md`.
 
 **Portability is not established.** One machine, one distro. The 5K patches are

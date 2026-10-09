@@ -1,8 +1,9 @@
 # Tiled 5K: diagnosing and fixing the seam
 
 > **Status: VERIFIED for seamless tiling.**
-> The seam was diagnosed and fixed on the reference machine. `tiled_stitch=-1`
-> is measured in both sysfs and the kernel command line. Cold-boot panel
+> The seam was diagnosed and fixed on the reference machine, now running
+> `7.2.7-1-default` where the stitching is upstream. `tiled_stitch=-1` is
+> measured in both sysfs and the kernel command line. Cold-boot panel
 > initialisation remains **BROKEN** — see `docs/kernel-updates.md`.
 
 The panel is two 2560x1440 halves that must behave as **one seamless
@@ -14,31 +15,60 @@ and tells you which section below applies.
 
 ---
 
-## Kernel 7.2.7 and later: no patch needed at all
+## Kernel 7.2.7 and later: no patch needed for the stitching
 
-> **Verified 2026-10-07 on the reference machine.** Upstream `amdgpu` gained
-> native `tiled_stitch` support between 7.2.2 and 7.2.7. On 7.2.7 the
-> distribution's shipped module does **not** have it — the SUSE
-> `kernel-default-7.2.7-1.1` binary module builds without it — but the source
-> tree does. Build `amdgpu.ko` from `/usr/src/linux-7.2.7-1` and the seam is
-> fixed with no out-of-tree patch of any kind.
+> **Verified 2026-10-09 on the reference machine, now running `7.2.7-1-default`.**
+> Upstream `amdgpu` gained native `tiled_stitch` between 7.2.2 and 7.2.7, and
+> **the SUSE binary module for 7.2.7 ships it** — an earlier version of this
+> document claimed the shipped module lacked it and had to be rebuilt from
+> source. That is wrong, and the measurement is below.
 
 ```c
 // drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c, 7.2.7
 int amdgpu_tiled_stitch = -1; /* auto */
 module_param_named(tiled_stitch, amdgpu_tiled_stitch, int, 0444);
-
 bool amdgpu_dm_has_tiled_stitch_panel(struct amdgpu_device *adev);
 ```
 
-The 7.2.2-era patches in `patches/amdgpu-5k/` remain necessary for 7.2.2 and
-earlier. **Check before applying them:**
+### What the shipped module actually has
+
+```bash
+$ modinfo -p amdgpu | grep tiled_stitch
+tiled_stitch: Stitch supported Apple iMac 5K dual-tile panels into one logical
+display (-1 = auto/default, 0 = disable, 1 = enable supported iMac panels only) (int)
+```
+
+The parameter is present in `/usr/lib/modules/7.2.7-1-default/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst`
+(6,830,549 bytes). **No rebuild is required for the stitching on 7.2.7.**
+
+### Check before applying any of the 7.2.2-era patches
 
 ```bash
 grep -c tiled_stitch /usr/src/linux-$(uname -r | cut -d- -f1)-1/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
-# 0  -> this kernel needs the out-of-tree patch
-# >0 -> this kernel has it upstream; rebuild amdgpu from source instead
+# 0  -> this kernel needs the out-of-tree stitch patch
+# >0 -> this kernel has it upstream; do not apply that patch
 ```
+
+### Not all six patches are obsolete
+
+`tiled_stitch` upstream does **not** mean the vendored stack can be dropped. Two
+of the six are now redundant and four are still doing work:
+
+| Patch | On 7.2.7 |
+|---|---|
+| `imac5k-stitch-layer-7.x.patch` | **obsolete** — `tiled_stitch` is upstream |
+| `amdgpu-vce-suspend-in-reset.patch` | **obsolete** — upstream at `amdgpu_vce.c:327` |
+| `amdgpu-vce3-ring-align-mask.patch` | **still needed** — `vce_v3_0.c:939` still has `align_mask = 0xf` |
+| `imac5k-lean-core-7.2.x.patch` | **still needed** — second-tile wake (`0x4f1`) and genlock are not upstream |
+| `imac5k-stitch-hide-slave.patch` | **still needed** — `amdgpu_dm_link_is_tiled_stitch_slave()` is not upstream |
+| `amdgpu-hpd-skip-during-reset.patch` | **still needed** — no `amdgpu_in_reset` guard upstream |
+
+The second-tile wake is the part upstream `tiled_stitch` does not cover: the
+right-hand tile still needs the `0x4F1` root-latch pulse to come up.
+
+**A reduced four-patch stack has not been booted.** The table above is a source
+inspection; the machine is still running all six. See
+`docs/reference-system.md`.
 
 ### It works differently, and that is the better behaviour
 
@@ -86,7 +116,8 @@ $ cat /sys/module/amdgpu/parameters/tiled_stitch
 ```
 
 The earlier contradiction came from the out-of-tree patch, which used a
-different type. On a patched 7.2.2 kernel the sysfs value is not authoritative.
+different type. That patch is obsolete on 7.2.7, so the disagreement no longer
+applies; on a patched 7.2.2 kernel the sysfs value was never authoritative.
 
 ### `amdgpu` takes about 8 seconds to initialise
 
@@ -102,7 +133,7 @@ Any boot splash has under a second of usable display. Plymouth cannot be made
 to show on this machine for this reason alone — see
 [`docs/recovery.md`](recovery.md#plymouth-cannot-display-here).
 
-### Building the 7.2.7 module
+### Building the 7.2.7 module (not needed for stitching, still needed for the other four patches)
 
 The module is large; strip it or the initramfs becomes unwieldy:
 

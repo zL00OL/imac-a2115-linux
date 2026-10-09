@@ -99,6 +99,27 @@ refuses to apply elsewhere on purpose: on a series where the amdgpu source has
 drifted far enough it will not apply, and forcing it produces a broken module.
 A future 7.3+ needs the patch re-ported by a human, not re-run.
 
+### Two of the six are obsolete on 7.2.7
+
+The reference machine now runs `7.2.7-1-default`, where upstream `amdgpu`
+carries `tiled_stitch` and the VCE-reset fix. Check before applying:
+
+| Patch | On 7.2.7 |
+|---|---|
+| `imac5k-stitch-layer-7.x.patch` | **obsolete** — `tiled_stitch` upstream at `amdgpu_drv.c:1054` |
+| `amdgpu-vce-suspend-in-reset.patch` | **obsolete** — upstream at `amdgpu_vce.c:327` |
+| `amdgpu-vce3-ring-align-mask.patch` | still needed — `vce_v3_0.c:939` is still `0xf` |
+| `imac5k-lean-core-7.2.x.patch` | still needed — second-tile wake and genlock are not upstream |
+| `imac5k-stitch-hide-slave.patch` | still needed — helper is not upstream |
+| `amdgpu-hpd-skip-during-reset.patch` | still needed — no `amdgpu_in_reset` guard upstream |
+
+```bash
+grep -c tiled_stitch /usr/src/linux-$(uname -r | cut -d- -f1)-1/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+```
+
+A reduced four-patch stack has not been booted; the machine still runs all six.
+See `docs/tiled-5k.md`.
+
 ## Building
 
 See `docs/kernel-updates.md`. The short version: a full `make modules` is
