@@ -149,7 +149,9 @@ before changing anything.
 | `docs/hardware.md` | machine facts, and which `amdgpu` actually loads |
 | `docs/audio.md` | the CS8409 codec, **headset (EarPods) capture**, and the internal microphone level |
 | `docs/brightness.md` | **panel brightness** — solved with `acpi_backlight=video`; also the firmware control path and the dead ends |
-| `docs/igpu-and-quicksync.md` | **the hidden Intel iGPU** and hardware encoding — why it is invisible, and the documented-but-unapplied fix |
+| `docs/igpu-and-quicksync.md` | **the hidden Intel iGPU** and hardware encoding — why it is invisible, how it is exposed, and how that is kept across kernel updates |
+| `kernel/` | the two `kernel-install` hooks: ESP prune, and the one that stops a kernel update from silently costing the iGPU |
+| `wireplumber/` | names the CS8409 codec's nodes "iMac Audio" / "iMac Microphone" instead of a part number |
 | `docs/distro-matrix.md` | what applies on which distro |
 | `docs/troubleshooting.md` | failure modes that cost time |
 | `scripts/imac-verify` | **one command that says whether this machine works** — read-only; paste its output when reporting an issue |
@@ -157,6 +159,9 @@ before changing anything.
 | `scripts/imac-reapply` | re-apply local customisations after an update |
 | `scripts/imac-audio` | **the audio path** — verify the loaded codec, install the patched driver, microphone diagnostics |
 | `scripts/imac-brightness` | set panel brightness without the desktop (the slider works on its own now) |
+| `scripts/imac-setos-patch` | exposes the iGPU by editing the kernel's EFI stub — finds the model table by content, refuses to guess |
+| `scripts/imac-setos-install` | regenerates the patched kernel and the single boot entry after every kernel install |
+| `scripts/esp-prune-kernels` | keeps the ESP within capacity; called by the `95-` hook |
 | `scripts/imac-audio-fix` | **RETIRED** — would remove the driver that makes headset capture work; kept as a stub the record, `--check` only |
 | `scripts/imac-audio-module` | **RETIRED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/audio.md](docs/audio.md) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |

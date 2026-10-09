@@ -11,3 +11,6 @@ squashfs-root/
 # ESP/BLS backups and generated initramfs
 5k-stackC-backup/
 initrd-stackC*
+# Python bytecode from syntax-checking scripts
+__pycache__/
+*.pyc

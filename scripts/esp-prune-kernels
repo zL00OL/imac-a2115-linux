@@ -1,0 +1,35 @@
+#!/bin/bash
+# Keep the newest kernel+initrd pair on the ESP and delete superseded ones.
+# The setos kernel is preserved by name: it is the default entry.
+set -uo pipefail
+ESP=/boot/efi
+KEEP_INITRD=""
+# the most recently written initrd is the one just installed
+newest=$(ls -t "$ESP"/opensuse-slowroll/*/initrd* 2>/dev/null | head -1)
+[ -n "$newest" ] && KEEP_INITRD=$(basename "$newest")
+log(){ echo "$(date -Is) $*" >> /var/log/esp-prune.log; }
+log "prune kv=${1:-none} keeping initrd=$KEEP_INITRD"
+for d in "$ESP"/opensuse-slowroll/*/; do
+  [ -d "$d" ] || continue
+  for f in "$d"*; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f")
+    case "$b" in
+      initrd) continue ;;
+      linux-setos) continue ;;
+      initrd-*) [ "$b" = "$KEEP_INITRD" ] && continue; rm -f "$f"; log "  rm $b" ;;
+      linux-*)    rm -f "$f"; log "  rm $b" ;;
+    esac
+  done
+done
+# drop entry files that no longer resolve
+for e in "$ESP"/loader/entries/*.conf; do
+  [ -e "$e" ] || continue
+  L=$(awk '$1=="linux" {print $2}' "$e")
+  I=$(awk '$1=="initrd" {print $2}' "$e")
+  if [ ! -f "$ESP$L" ] || [ ! -f "$ESP$I" ]; then
+    log "  rm entry $(basename "$e") (unresolvable)"
+    rm -f "$e"
+  fi
+done
+exit 0

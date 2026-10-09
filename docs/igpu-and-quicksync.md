@@ -113,34 +113,48 @@ distinguish them is to change the asking, not to probe harder.
 
 ### The patch as applied
 
-Approach **B** (post-build byte edit). This machine boots systemd-boot with a BLS
-entry and a plain `vmlinuz`, so there is no UKI constraint here.
+Approach **B** (post-build byte edit), now performed by
+`/usr/local/libexec/imac-setos-patch` rather than a hardcoded `dd` offset. See
+[How it is kept applied](#how-it-is-kept-applied).
 
 ```
-kernel  /boot/efi-xbootldr/opensuse-slowroll/7.2.7-1-default/linux
+kernel  /boot/efi/opensuse-slowroll/7.2.7-1-default/linux-setos
 size    17,537,392 bytes  (unchanged by the edit)
-table   8 slots of 15 bytes, starting at offset 17524736
-          17524736  MacBookPro11,3
-          17524751  MacBookPro11,5
-          17524766  MacBookPro13,3
-          17524781  MacBookPro14,3
-          17524796  MacBookPro15,1
-          17524811  MacBookPro15,3
-          17524826  MacBookPro16,1
-          17524841  MacBookPro16,4     <- last slot, overwritten
+table   8 slots of 15 bytes, located by content search
+          MacBookPro11,3
+          MacBookPro11,5
+          MacBookPro13,3
+          MacBookPro14,3
+          MacBookPro15,1
+          MacBookPro15,3
+          MacBookPro16,1
+          MacBookPro16,4     <- last slot, overwritten
 ```
 
 `"iMac19,1"` is 8 characters and fits the 15-byte NUL-padded slot without
-disturbing the table:
+disturbing the table. The offset found on this kernel is 17524841, but treat
+that as an observation, not a constant:
+
+```bash
+sudo /usr/local/libexec/imac-setos-patch \
+  /boot/efi/opensuse-slowroll/$(uname -r)/linux-setos
+# patched slot at offset 17524841: MacBookPro16,4 -> iMac19,1
+```
+
+Result on this kernel: **exactly 14 bytes changed**, all inside the slot, image
+size identical, and the written bytes verified by read-back. More or fewer
+differing bytes means something else was touched.
+
+The earlier form of this page documented the raw equivalent:
 
 ```bash
 printf 'iMac19,1\0\0\0\0\0\0\0' \
   | dd of=linux-setos bs=1 seek=17524841 conv=notrunc status=none
 ```
 
-Result: **exactly 14 bytes changed**, all inside the slot, image size identical.
-That is the check that proves the edit was surgical — more or fewer differing
-bytes means something else was touched.
+It is kept here only to show what the script automates. **Do not run it against
+a new kernel without first confirming the offset** — it has no verification and
+would corrupt the image silently if the table moved.
 
 ### Verified after boot
 
@@ -165,46 +179,132 @@ Intel iHD driver 26.2.2
   VAProfileJPEGBaseline  : VAEntrypointEncPicture
 ```
 
-`renderD128` is the AMD card and still reports no encoders. `vainfo` with no
-`--device` picks that one and looks broken; it is not.
+### DRM numbering on this machine is not the obvious order
+
+Worth recording, because it is the opposite of what the numbers suggest and it
+is easy to get wrong when copying config from another iMac:
+
+```
+card0  -> i915     (Intel)   card1  -> amdgpu  (AMD)
+renderD128 -> AMD   (no encoders)
+renderD129 -> Intel (H.264/HEVC/VP8 encode)
+```
+
+**The iGPU holds `card0` but `renderD129`.** The card numbers and the render
+numbers do not line up, because i915 registered first and took the lowest card
+index while amdgpu took the first render node.
+
+`vainfo` with no `--device` picks the AMD node and looks broken; it is not. Pass
+`--device /dev/dri/renderD129` explicitly.
+
+This inverts the reference project's setup, where i915 is loaded from the
+initramfs and therefore takes `card1`/`renderD128`. A `VA-API device` of
+`renderD128` is correct there and **wrong here**.
+
+### i915 invents connectors on this machine
+
+i915 currently runs with no display options at all:
+
+```
+$ cat /sys/module/i915/parameters/disable_display      # N
+$ cat /sys/module/i915/parameters/vbt_firmware          # (null)
+$ grep -o 'i915[^ ]*' /proc/cmdline                     # (nothing)
+```
+
+With no VBT, i915 invents one and creates connectors for every port:
+
+```
+card0-DP-4  card0-DP-5  card0-DP-6
+card0-HDMI-A-1  card0-HDMI-A-2  card0-HDMI-A-3     all disconnected
+```
+
+The panel survives only because amdgpu owns it. The reference project hit this
+on the iMac18,3 and ships a synthetic empty VBT plus `i915.disable_display=1` to
+suppress it, on the grounds that `disable_display=1` alone "only gates connector
+`detect()`" and is not sufficient.
+
+**That fix is deliberately not applied here.** The empty-VBT approach is for an
+iGPU that must never own a display; on this machine amdgpu drives the 5K panel
+and the arrangement is working. Adding the headless-VBT machinery would be a
+larger change than the symptom warrants, and it taints the kernel with an unsafe
+module parameter. The phantom connectors are cosmetic, all report
+`disconnected`, and nothing selects them.
+
+If a future kernel or driver change makes i915 claim the panel, that is the
+symptom to watch for — not the presence of the connectors themselves.
 
 ### Reverting
 
-The stock kernel entry is kept alongside. Selecting
-`openSUSE 7.2.7-1-default` (no `iGPU: set_os patched` suffix) at the boot menu
-reverts this, because the change lives in the kernel image and nowhere else.
+The change lives in the kernel image and nowhere else, so reverting is a matter
+of booting a stock kernel. The stock image and its entry are both kept:
 
-## Risks — read before applying
+```
+stock kernel:  /boot/efi/opensuse-slowroll/7.2.7-1-default/linux-e13dc6943...
+stock entry:   /var/tmp/boot-entries-parked/
+```
 
-Enabling the iGPU is not a display-only change. Two concrete hazards:
+To revert, copy a stock entry back into `/boot/efi/loader/entries/` and set it
+default:
 
-### 1. It will change the DRM device topology
+```bash
+sudo cp /var/tmp/boot-entries-parked/opensuse-slowroll-7.2.7-1-default-*.conf \
+        /boot/efi/loader/entries/
+sudo sed -i 's|^default .*|default opensuse-slowroll-7.2.7-1-default-155.conf|' \
+        /boot/efi/loader/loader.conf
+```
 
-The 5K display is driven by the patched `amdgpu` in `initrd-stackC`, and
-`amdgpu.tiled_stitch` depends on that single-GPU arrangement. Adding a second
-DRM device changes card enumeration, connector naming, and which GPU
-`KDE`/`Wayland` picks as primary.
+Note that the stock entry is **parked out of `loader/entries/`** rather than
+deleted. That is not tidiness — while both entries are present systemd-boot
+selects the stock one, and that is precisely how the iGPU went missing after a
+kernel update. Keep only the entry you intend to boot.
 
-**This is the risk that matters most**, and it is not covered by
-`docs/recovery.md`, which assumes one GPU. Symptom to watch for: both panels
-dark, or resolution collapsing to 2880-wide — that would mean tiling broke, not
-that the display died.
+## Risks
 
-### 2. It can take the HDA controller
+These were written before the patch was applied and are kept because the next
+kernel rebuild re-runs the same ground. **The iGPU is now bound, so these are
+live conditions to watch rather than predictions.** See
+[DRM numbering](#drm-numbering-on-this-machine-is-not-the-obvious-order) for
+what the topology actually is now.
+
+### 1. It changes the DRM device topology — verified safe
+
+The 5K display is driven by the patched `amdgpu`, and `amdgpu.tiled_stitch=-1`
+depends on that single-GPU arrangement. A second DRM device changes card
+enumeration, connector naming, and which GPU Wayland picks as primary.
+
+This was the risk that mattered most and the one `docs/recovery.md` did not
+cover. **It did not materialise**: after the set_os boot, amdgpu still owns the
+panel and tiling is intact.
+
+```
+card1-eDP-1: 5120x2880        tiled_stitch: -1       i915 loaded, amdgpu loaded
+```
+
+Had it broken, the symptom would have been both tiles dark or the resolution
+collapsing to 2880-wide — tiling broken, not the display dying.
+
+### 2. It can take the HDA controller — and `gpu_bind=0` is what prevents it
 
 The iGPU and the CS8409 codec share the HDA controller at `00:1f.3`. When the
-iGPU binds, it can claim the audio device — which is the entire reason
-`/etc/modprobe.d/99-imac-audio-gpu-bind.conf` sets `gpu_bind=0`.
+iGPU binds, `snd_hdac_i915_init()` returns `-EPROBE_DEFER` until i915 has
+probed, and because it defers the **whole PCH controller**, that takes the
+speakers and microphones with it. `/etc/modprobe.d/99-imac-audio-gpu-bind.conf`
+sets `gpu_bind=0` to prevent exactly this.
 
-Worth being precise about the current state: **`gpu_bind=0` is presently a
-no-op.** The iGPU is not enumerated at all, so there is nothing for it to stop
-from binding. The setting only starts to matter *after* the set_os call works —
-at which point it becomes the thing standing between you and silent speakers and
-a dead microphone. Expect to have to decide deliberately whether to relax it.
+**This is no longer hypothetical, and the trade has already been made in favour
+of audio.** An earlier version of this page said `gpu_bind=0` was "presently a
+no-op" because the iGPU was not enumerated. That was true when written and is now
+wrong: the iGPU is bound, `gpu_bind=0` is live, and audio is working because of
+it. Verified after the set_os boot:
 
-That is a genuine trade: QuickSync hardware encoding against working internal
-audio. Given that the internal mic on this machine has already been fragile, this
-is not a decision to make casually.
+```
+cs8409 module parameters: 10          patched codec intact
+alsa: card 1 = PCH [HDA Intel PCH], CS8409/CS42L83 Analog present
+Internal Mic Capture Switch: on,on    (set by /usr/local/libexec/imac-mic-on)
+```
+
+So do **not** relax `gpu_bind=0` to "clean up" a setting that looks unused. It is
+load-bearing, and removing it costs the internal mic.
 
 ### What is *not* a risk
 
@@ -214,89 +314,137 @@ is not a decision to make casually.
 - **A brick.** The worst realistic outcome is a failed boot, and
   `docs/recovery.md` already covers recovering a broken boot.
 
-## Procedure
+## How it is kept applied
 
-Not run. This is the order it should be attempted in.
+Both of these are installed and running. They exist because the first thing that
+went wrong after the patch was applied was **a kernel install quietly reverting
+it**.
 
-### Before you start
+### What went wrong
 
-```bash
-sudo cp -p "/boot/efi/opensuse-slowroll/$(uname -r)/initrd-stackC" \
-           ~/initrd-stackC.backup
-ls -lh ~/initrd-stackC.backup; df -h /boot/efi
-```
+A `zypper` transaction ran `kernel-install`, which wrote a fresh **stock** kernel
+and a **stock** BLS entry to the ESP. systemd-boot then had two entries to choose
+from, and it picked the stock one — so the machine came back with the iGPU
+silently gone. Nothing errored; the only symptom was `i915` missing and no
+QuickSync.
 
-Confirm you can reach the machine over SSH **and** have physical access. This
-change touches boot, so "I can't get back in" is a real outcome.
+This is why the boot entry is now the *only* entry on the ESP, and why the
+patched image is regenerated automatically.
 
-### 1. Confirm the starting state
+### `imac-setos-patch` — verified, not a hardcoded offset
 
-```bash
-lspci -nn | grep -iE 'vga|display|3d controller'   # expect: AMD only
-[ -e /sys/bus/pci/devices/0000:00:02.0 ] && echo PRESENT || echo "ABSENT - expected"
-```
-
-### 2. Apply the source patch
-
-In the kernel source, `drivers/firmware/efi/libstub/x86-stub.c`, add the model to
-`type1_product_matches[]`:
-
-```c
-        "MacBookPro11,3", ... "MacBookPro16,4",
-+       "iMac19,1",
-```
-
-The entries are `[15]`-byte slots, so `"iMac19,1"` (8 chars) fits without
-changing the table's layout.
-
-### 3. Rebuild
-
-Per `docs/kernel-updates.md`. Keep `gpu_bind=0` in place for the first boot — you
-want to see whether the iGPU appears *before* it can interfere with audio.
-
-### 4. Verify after reboot
+`/usr/local/libexec/imac-setos-patch` finds the model table **by content**, not at
+a fixed offset:
 
 ```bash
-lspci -nn | grep -iE 'vga|display|3d controller'   # expect Intel 00:02.0 TOO
-modinfo i915 | head -1
-lsmod | grep -iE 'i915|amdgpu'                      # expect both
-amixer -c 0 cget 'Internal Mic Capture Switch'      # expect: on,on
-arecord -l                                            # expect the internal codec present
-./scripts/imac-verify                                # expect display + audio both [ ok ]
+/usr/local/libexec/imac-setos-patch /boot/efi/opensuse-slowroll/$(uname -r)/linux-setos
+# imac-setos-patch: ...: patched slot at offset 17524841: MacBookPro16,4 -> iMac19,1
 ```
 
-**Also confirm the 5K panel still tiles** — that is the thing at risk:
+It requires the full 120-byte stock table (eight 15-byte slots) to appear
+**exactly once** in the image. If it does not — a kernel rebuild has moved or
+changed the table — it **leaves the image alone** and says so, rather than
+writing at a stale offset and corrupting the kernel:
+
+```
+SKIPPED: set_os model table not found exactly once (found 0).
+Image left stock; iGPU stays hidden.
+```
+
+It also refuses to report success unless the size is unchanged and the written
+bytes read back correctly. The documented `dd` one-liner earlier in this file
+has no such check, which is exactly the fragility this replaces.
+
+### `imac-setos-install` — survives kernel updates
+
+`/etc/kernel/install.d/96-imac-setos.install` runs after every `kernel-install`
+and, for the newly installed kernel:
+
+1. copies it to `linux-setos` and patches it,
+2. rewrites `aaa-igpu-setos.conf` to point at the new kernel and the initrd
+   kernel-install just produced,
+3. **parks** the stock entry outside `loader/entries/` so the bootloader has
+   exactly one choice, and
+4. re-asserts `default aaa-igpu-setos.conf`.
+
+The initrd is **reused, never copied**. The ESP is 197 MiB and one kernel+initrd
+pair is about 101 MiB, so a second copy fills the partition — an attempt to do
+exactly that during this work produced a truncated 80 MiB initrd and a 100% full
+ESP, which was then rolled back. Do not add one.
+
+### Verifying the state
 
 ```bash
-cat /sys/module/amdgpu/parameters/tiled_stitch      # expect -1
-sudo scripts/check-5k.sh                            # expect 2 connectors, tiled
+f=/boot/efi/loader/entries/aaa-igpu-setos.conf
+awk '$1=="linux"||$1=="initrd"{print $2}' "$f" | while read r; do
+  [ -f "/boot/efi$r" ] && echo "OK   $r" || echo "MISS $r"
+done
+ls /boot/efi/loader/entries/          # expect exactly one entry
+df -h /boot/efi                       # expect free space, not 0
 ```
 
-If either panel goes dark, stop and revert — see below.
+## Applying it from scratch (not needed on this machine)
 
-### 5. Only then consider QuickSync
-
-`obs-qsv11.so` is already installed on this machine and loads successfully, so
-no OBS reinstall is needed. Once the iGPU appears, the QSV encoder should become
-available and `obs_qsv` will show up in OBS's encoder list.
-
-## Reverting
-
-Fully reversible, and cheap.
+Kept because the machine can be rebuilt. Everything above is already installed.
 
 ```bash
-# 1. restore the working initramfs
-sudo cp -p ~/initrd-stackC.backup \
-        "/boot/efi/opensuse-slowroll/$(uname -r)/initrd-stackC"
-# 2. drop the model from the kernel source and rebuild, or boot the previous
-#    kernel at the systemd-boot menu - the stub change is per-kernel-image,
-#    so an unpatched kernel simply will not make the set_os call.
-# 3. reboot
+sudo install -m 755 imac-setos-patch /usr/local/libexec/
+sudo install -m 755 imac-setos-install /usr/local/libexec/
+sudo install -m 755 96-imac-setos.install /etc/kernel/install.d/
+sudo /usr/local/libexec/imac-setos-install    # apply now
 ```
 
-Because the change lives in the kernel image rather than in firmware or in a
-persistent setting, **selecting the previous kernel at the boot menu reverts it
-without any file changes.**
+### Verify after a reboot
+
+```bash
+lspci -nn | grep -iE 'vga|display|3d controller'   # expect Intel 00:02.0 AND AMD
+lsmod | grep -iE 'i915|amdgpu'                     # expect both
+amixer -c 1 cget 'Internal Mic Capture Switch'     # card 1 once i915 probes first
+./scripts/imac-verify                              # display + audio both [ ok ]
+cat /sys/module/amdgpu/parameters/tiled_stitch     # expect -1
+sudo scripts/check-5k.sh                           # expect tiled 5120x2880
+```
+
+### Using QuickSync in OBS
+
+`obs-qsv11.so` loads, but the **RPM** build of OBS cannot use VA-API at all,
+because openSUSE's ffmpeg omits the H.264 and HEVC encoders:
+
+```
+$ ffmpeg -hide_banner -encoders | grep vaapi
+   av1_vaapi   vp8_vaapi   vp9_vaapi   mjpeg_vaapi   mpeg2_vaapi
+   # no h264_vaapi, no hevc_vaapi
+```
+
+OBS reports `FFmpeg VAAPI H264 encoding not supported` and lists
+`ffmpeg_openh264` as its only video encoder. The iGPU is fine — `vainfo` shows
+`VAProfileH264Main: VAEntrypointEncSlice` — nothing in the stack asks it to
+encode.
+
+The **Flatpak** OBS bundles an ffmpeg that does have them, and enumerates:
+
+```
+$ flatpak run com.obsproject.Studio   # Settings > Output > Recording > Encoder
+   ffmpeg_vaapi_tex  (FFmpeg VAAPI H.264)   <- the iGPU
+   hevc_ffmpeg_vaapi_tex  (FFmpeg VAAPI HEVC)
+   obs_qsv11_hevc  (QuickSync HEVC)
+```
+
+Set the **VA-API device to `/dev/dri/renderD129`** — the Intel node. See
+[DRM numbering](#drm-numbering-on-this-machine-is-not-the-obvious-order) for why
+that is not the one you would guess.
+
+## Note on approach A
+
+Approach A (add `"iMac19,1"` to `type1_product_matches[]` and rebuild) remains
+the cleaner end state and is what an upstream patch would do. Approach B is in
+use because it needs no kernel fork and can be reapplied to any future kernel
+automatically.
+
+If you ever rebuild the kernel from source, adding the model to
+`x86-stub.c` supersedes the byte patch: `imac-setos-patch` reports
+`already patched` and leaves it alone, and `/usr/local/libexec/imac-setos-install`
+keeps working unchanged.
 
 ## Related
 

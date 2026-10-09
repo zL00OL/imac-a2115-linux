@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Expose the hidden Intel iGPU by making the kernel's EFI stub call set_os.
+
+The kernel announces "macOS is booting" through Apple's set_os EFI protocol,
+but only for the models in apple_match_product_name() in
+drivers/firmware/efi/libstub/x86-stub.c. That list is MacBookPro-only, so on an
+iMac the call never happens and the firmware never publishes 00:02.0.
+
+The list is stored uncompressed as 15-byte NUL-padded slots, so the last slot
+(a MacBookPro this machine never was) can be overwritten in place with our own
+model id. The image stays byte-identical in size, so no offsets shift.
+
+This finds the table by CONTENT rather than by a hardcoded offset: a kernel
+rebuild can move it, and writing at a stale offset would corrupt the image
+silently. If the table is not found exactly once, the image is left alone.
+"""
+import sys
+
+SLOT = 15
+STOCK = [b"MacBookPro11,3", b"MacBookPro11,5", b"MacBookPro13,3", b"MacBookPro14,3",
+         b"MacBookPro15,1", b"MacBookPro15,3", b"MacBookPro16,1", b"MacBookPro16,4"]
+OURS = b"iMac19,1"
+
+
+def table(models):
+    return b"".join(m.ljust(SLOT, b"\0") for m in models)
+
+
+def patch(path, verbose=True):
+    with open(path, "rb") as f:
+        data = f.read()
+    size_before = len(data)
+
+    already = table(STOCK[:-1] + [OURS])
+    if data.count(already) == 1:
+        return "already patched"
+
+    stock = table(STOCK)
+    if data.count(stock) != 1:
+        return ("SKIPPED: set_os model table not found exactly once "
+                "(found %d). Image left stock; iGPU stays hidden."
+                % data.count(stock))
+
+    at = data.find(stock) + 7 * SLOT
+    patch_bytes = OURS.ljust(SLOT, b"\0")
+    with open(path, "r+b") as f:
+        f.seek(at)
+        f.write(patch_bytes)
+        f.flush()
+
+    with open(path, "rb") as f:
+        f.seek(at)
+        written = f.read(SLOT)
+    if written != patch_bytes:
+        return "FAILED: write did not take effect"
+    import os
+    if os.path.getsize(path) != size_before:
+        return "FAILED: image size changed"
+
+    if verbose:
+        return ("patched slot at offset %d: %s -> %s"
+                % (at, STOCK[-1].decode(), OURS.decode()))
+    return "patched"
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit("usage: imac-setos-patch <kernel-image> [...]")
+    for p in sys.argv[1:]:
+        try:
+            print("  imac-setos-patch: %s: %s" % (p, patch(p)))
+        except OSError as e:
+            print("  imac-setos-patch: WARNING %s: %s" % (p, e))

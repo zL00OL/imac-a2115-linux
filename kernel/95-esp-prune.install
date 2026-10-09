@@ -1,0 +1,12 @@
+#!/bin/sh
+# The ESP is 197M and systemd-boot on this machine reads $BOOT from it, NOT from
+# the XBOOTLDR partition - confirmed via LoaderDevicePartUUID. A kernel plus its
+# initrd is ~95M, so two kernels do not fit. After an install, keep only the
+# entry that was just written and drop superseded payloads.
+#
+# An earlier version of this hook moved payloads to /boot/efi-xbootldr. That was
+# wrong: it emptied the space the bootloader actually reads, and the next boot
+# found no kernel there.
+[ "$1" = add ] || exit 0
+[ -x /usr/local/sbin/esp-prune-kernels ] && /usr/local/sbin/esp-prune-kernels "$2"
+exit 0

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rebuild the set_os-patched kernel and the single boot entry after each install.
+# Ordered after 95-esp-prune.install so the superseded payloads are gone first.
+[ "$1" = add ] || exit 0
+[ -x /usr/local/libexec/imac-setos-install ] && /usr/local/libexec/imac-setos-install
+exit 0
