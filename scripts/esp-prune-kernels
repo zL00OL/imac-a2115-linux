@@ -1,34 +1,57 @@
 #!/bin/bash
-# Keep the newest kernel+initrd pair on the ESP and delete superseded ones.
-# The setos kernel is preserved by name: it is the default entry.
+# Keep the ESP within capacity after a kernel install.
+#
+# The ESP is 197 MiB and one kernel+initrd pair is ~101 MiB, so only ONE pair
+# fits. The pair to keep is the one kernel-install has just written.
+#
+# Both files of that pair are kept: the stock kernel AND the setos-patched copy.
+# An earlier version deleted every linux-* and preserved only linux-setos, which
+# is wrong: 96-imac-setos-install derives the patched image FROM the stock one,
+# so removing the stock kernel leaves the next install with nothing to patch and
+# the machine boots without the iGPU.
+#
+# Usage: esp-prune-kernels <kver>   (kver is the version being installed)
 set -uo pipefail
 ESP=/boot/efi
-KEEP_INITRD=""
-# the most recently written initrd is the one just installed
-newest=$(ls -t "$ESP"/opensuse-slowroll/*/initrd* 2>/dev/null | head -1)
-[ -n "$newest" ] && KEEP_INITRD=$(basename "$newest")
-log(){ echo "$(date -Is) $*" >> /var/log/esp-prune.log; }
-log "prune kv=${1:-none} keeping initrd=$KEEP_INITRD"
+KV="${1:-}"
+
+log(){ echo "$(date -Is) kver=${KV:-none} $*" >> /var/log/esp-prune.log; }
+
+# The version directory being installed into is the one to keep, in full.
+KEEP_DIR=""
+if [ -n "$KV" ] && [ -d "$ESP/opensuse-slowroll/$KV" ]; then
+  KEEP_DIR="$ESP/opensuse-slowroll/$KV"
+  log "keeping $KV"
+else
+  # Fallback: the version directory with the newest initrd.
+  newest=$(ls -t "$ESP"/opensuse-slowroll/*/initrd* 2>/dev/null | head -1)
+  [ -n "$newest" ] && KEEP_DIR=$(dirname "$newest")
+  log "no kver given, keeping $(basename "${KEEP_DIR:-none}")"
+fi
+
 for d in "$ESP"/opensuse-slowroll/*/; do
   [ -d "$d" ] || continue
+  if [ "$d" = "$KEEP_DIR/" ]; then
+    continue                      # keep this whole directory untouched
+  fi
   for f in "$d"*; do
     [ -e "$f" ] || continue
     b=$(basename "$f")
     case "$b" in
-      initrd) continue ;;
-      linux-setos) continue ;;
-      initrd-*) [ "$b" = "$KEEP_INITRD" ] && continue; rm -f "$f"; log "  rm $b" ;;
-      linux-*)    rm -f "$f"; log "  rm $b" ;;
+      linux|linux-*)    rm -f "$f"; log "  rm $KV-superseded $d$b" ;;
+      initrd|initrd-*)  rm -f "$f"; log "  rm superseded $d$b" ;;
     esac
+    rmdir "$d" 2>/dev/null && log "  rmdir $d"
   done
 done
-# drop entry files that no longer resolve
+
+# Drop entries that no longer resolve, so a stale one cannot win the default.
 for e in "$ESP"/loader/entries/*.conf; do
   [ -e "$e" ] || continue
   L=$(awk '$1=="linux" {print $2}' "$e")
   I=$(awk '$1=="initrd" {print $2}' "$e")
-  if [ ! -f "$ESP$L" ] || [ ! -f "$ESP$I" ]; then
-    log "  rm entry $(basename "$e") (unresolvable)"
+  if [ ! -f "$ESP$L" ] || { [ -n "$I" ] && [ ! -f "$ESP$I" ]; }; then
+    log "  rm unresolvable entry $(basename "$e")"
     rm -f "$e"
   fi
 done

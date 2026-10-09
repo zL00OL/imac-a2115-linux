@@ -118,7 +118,7 @@ Approach **B** (post-build byte edit), now performed by
 [How it is kept applied](#how-it-is-kept-applied).
 
 ```
-kernel  /boot/efi/opensuse-slowroll/7.2.7-1-default/linux-setos
+kernel  /boot/efi/opensuse-slowroll/7.2.7-1-default/linux
 size    17,537,392 bytes  (unchanged by the edit)
 table   8 slots of 15 bytes, located by content search
           MacBookPro11,3
@@ -137,7 +137,7 @@ that as an observation, not a constant:
 
 ```bash
 sudo /usr/local/libexec/imac-setos-patch \
-  /boot/efi/opensuse-slowroll/$(uname -r)/linux-setos
+  /boot/efi/opensuse-slowroll/$(uname -r)/linux
 # patched slot at offset 17524841: MacBookPro16,4 -> iMac19,1
 ```
 
@@ -145,11 +145,15 @@ Result on this kernel: **exactly 14 bytes changed**, all inside the slot, image
 size identical, and the written bytes verified by read-back. More or fewer
 differing bytes means something else was touched.
 
+The kernel is patched **in place**. An earlier version copied it to
+`linux-setos` and kept both; that does not fit alongside a new install on a
+197 MiB ESP, and a truncated `linux-setos` was the result.
+
 The earlier form of this page documented the raw equivalent:
 
 ```bash
 printf 'iMac19,1\0\0\0\0\0\0\0' \
-  | dd of=linux-setos bs=1 seek=17524841 conv=notrunc status=none
+  | dd of=linux bs=1 seek=17524841 conv=notrunc status=none
 ```
 
 It is kept here only to show what the script automates. **Do not run it against
@@ -235,28 +239,30 @@ symptom to watch for — not the presence of the connectors themselves.
 
 ### Reverting
 
-The change lives in the kernel image and nowhere else, so reverting is a matter
-of booting a stock kernel. The stock image and its entry are both kept:
+The change lives in the kernel image and nowhere else, so reverting means
+booting a stock kernel. The stock image lives on the XBOOTLDR, because the ESP
+has room for one pair only (see [the ESP fits one kernel](#the-esp-fits-one-kernel-and-that-shapes-everything)):
 
 ```
-stock kernel:  /boot/efi/opensuse-slowroll/7.2.7-1-default/linux-e13dc6943...
+stock kernel:  /boot/efi-xbootldr/opensuse-slowroll/7.2.7-1-default/linux-e13dc6943...
 stock entry:   /var/tmp/boot-entries-parked/
 ```
 
-To revert, copy a stock entry back into `/boot/efi/loader/entries/` and set it
-default:
+To revert, put a stock entry back and make it the default:
 
 ```bash
-sudo cp /var/tmp/boot-entries-parked/opensuse-slowroll-7.2.7-1-default-*.conf \
+sudo cp /var/tmp/boot-entries-parked/opensuse-slowroll-*.conf \
         /boot/efi/loader/entries/
+sudo ln -sf /boot/efi-xbootldr/opensuse-slowroll/$(uname -r)/linux-e13dc69435d5b91c3372b96b3b3cf8c7868a18e1 \
+        /boot/efi/opensuse-slowroll/$(uname -r)/linux
 sudo sed -i 's|^default .*|default opensuse-slowroll-7.2.7-1-default-155.conf|' \
         /boot/efi/loader/loader.conf
 ```
 
-Note that the stock entry is **parked out of `loader/entries/`** rather than
-deleted. That is not tidiness — while both entries are present systemd-boot
-selects the stock one, and that is precisely how the iGPU went missing after a
-kernel update. Keep only the entry you intend to boot.
+The stock entry is **parked out of `loader/entries/`** rather than deleted. That
+is not tidiness: while both entries are present systemd-boot selects the stock
+one, and that is exactly how the iGPU went missing after the first kernel
+update. Keep only the entry you intend to boot.
 
 ## Risks
 
@@ -337,7 +343,7 @@ patched image is regenerated automatically.
 a fixed offset:
 
 ```bash
-/usr/local/libexec/imac-setos-patch /boot/efi/opensuse-slowroll/$(uname -r)/linux-setos
+/usr/local/libexec/imac-setos-patch /boot/efi/opensuse-slowroll/$(uname -r)/linux
 # imac-setos-patch: ...: patched slot at offset 17524841: MacBookPro16,4 -> iMac19,1
 ```
 
@@ -358,19 +364,55 @@ has no such check, which is exactly the fragility this replaces.
 ### `imac-setos-install` — survives kernel updates
 
 `/etc/kernel/install.d/96-imac-setos.install` runs after every `kernel-install`
-and, for the newly installed kernel:
+and, for the kernel being installed:
 
-1. copies it to `linux-setos` and patches it,
-2. rewrites `aaa-igpu-setos.conf` to point at the new kernel and the initrd
-   kernel-install just produced,
-3. **parks** the stock entry outside `loader/entries/` so the bootloader has
+1. patches it in place with `imac-setos-patch`,
+2. rewrites `aaa-igpu-setos.conf` to point at that kernel and its initrd,
+3. **parks** every other entry outside `loader/entries/` so the bootloader has
    exactly one choice, and
 4. re-asserts `default aaa-igpu-setos.conf`.
 
-The initrd is **reused, never copied**. The ESP is 197 MiB and one kernel+initrd
-pair is about 101 MiB, so a second copy fills the partition — an attempt to do
-exactly that during this work produced a truncated 80 MiB initrd and a 100% full
-ESP, which was then rolled back. Do not add one.
+Then `/etc/kernel/install.d/97-esp-prune.install` drops the previous version's
+files. It must run **last** — see below.
+
+Two details that are easy to get wrong, both of which were wrong here first:
+
+**The version comes from the hook's argument, not `uname -r`.** `kernel-install`
+calls hooks as `<verb> <kver> <entry-dir> <kernel-image> <initrd>…`, and the
+hook runs at *install* time while the previous kernel is still running. Using
+`uname -r` patches the old version's directory and leaves the new one stock.
+
+**The entry must not reuse the old entry's paths.** If it does, it still names
+the version the prune is about to delete, and the prune then removes the entry
+that was just written — which is how the ESP ended up with a valid kernel and no
+boot entry at all.
+
+### The ESP fits one kernel, and that shapes everything
+
+```
+kernel   16.7 MiB
+initrd   78.2 MiB      (a microcode-less dracut image)
+one pair 94.9 MiB   of 197 MiB
+```
+
+Two pairs *almost* fit, which is the trap. An earlier design kept a stock kernel
+**and** a patched `linux-setos` copy, and pruned the old version *before* the new
+one was written. In testing that produced:
+
+```
+cp: error copying ... to .../linux-setos: No space left on device
+-rwxr-xr-x  8318976  linux-setos      <- truncated to 8 MiB
+```
+
+A truncated kernel on the ESP is not a degraded machine, it is one that fails to
+boot.
+
+So: **the ESP carries only the patched image, patched in place.** The stock
+kernel lives on the XBOOTLDR (3.6 GiB, no pressure), which is also why the
+revert instructions below point there.
+
+Do not add a second copy of anything large to the ESP — in particular not the
+initrd, which is what filled it to 100% once during this work.
 
 ### Verifying the state
 
@@ -381,6 +423,16 @@ awk '$1=="linux"||$1=="initrd"{print $2}' "$f" | while read r; do
 done
 ls /boot/efi/loader/entries/          # expect exactly one entry
 df -h /boot/efi                       # expect free space, not 0
+```
+
+After a kernel install, the equivalent end-to-end check is that the new version
+directory holds exactly `linux` and `initrd`, and that the entry names it:
+
+```bash
+kv=$(ls -t /boot/efi/opensuse-slowroll/ | head -1)
+ls /boot/efi/opensuse-slowroll/$kv/            # expect: initrd  linux
+grep -E '^(version|linux)' /boot/efi/loader/entries/aaa-igpu-setos.conf
+lsinitrd /boot/efi/opensuse-slowroll/$kv/initrd >/dev/null && echo "initrd ok"
 ```
 
 ## Applying it from scratch (not needed on this machine)

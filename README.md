@@ -161,7 +161,7 @@ before changing anything.
 | `scripts/imac-brightness` | set panel brightness without the desktop (the slider works on its own now) |
 | `scripts/imac-setos-patch` | exposes the iGPU by editing the kernel's EFI stub — finds the model table by content, refuses to guess |
 | `scripts/imac-setos-install` | regenerates the patched kernel and the single boot entry after every kernel install |
-| `scripts/esp-prune-kernels` | keeps the ESP within capacity; called by the `95-` hook |
+| `scripts/esp-prune-kernels` | keeps the ESP within capacity; called by the `97-` hook, which runs last |
 | `scripts/imac-audio-fix` | **RETIRED** — would remove the driver that makes headset capture work; kept as a stub the record, `--check` only |
 | `scripts/imac-audio-module` | **RETIRED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/audio.md](docs/audio.md) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
