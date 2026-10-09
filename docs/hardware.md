@@ -13,7 +13,7 @@
 | Board | Mac-AA95B1DDAB278B95 |
 | System ID | *(redacted — stable hardware fingerprint)* |
 | CPU | Intel Core i5-8500, 6 threads, x86-64 |
-| RAM | 31.2 GiB |
+| RAM | 32 GB (2 × 16 GiB, 2667 MT/s); `MemTotal` 31.22 GiB |
 | GPU | AMD Ellesmere / Radeon RX 470-580 family (`polaris10`), 4 GiB VRAM |
 | Kernel driver | `amdgpu`, **patched** (6-patch 5K stack), loaded from `initrd-stackC` |
 | Display | 5120x2880, tiled by `amdgpu.tiled_stitch=-1` |

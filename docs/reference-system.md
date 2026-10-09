@@ -20,7 +20,8 @@ the machine.
 | CPU | Intel Core i5-8500 — **VERIFIED** |
 | GPU | AMD Ellesmere, `polaris10`, 4 GiB VRAM — **VERIFIED as ASIC** |
 | GPU marketing name | Radeon RX 570X (Ellesmere, `polaris10`), subsystem Apple `[106b:019e]` — **VERIFIED** |
-| RAM | 31 GiB — **VERIFIED** |
+| RAM | 32 GB installed: 2 × 16 GiB Crucial `CT16G4SFRA266.M16FRS`, 2667 MT/s — **VERIFIED** |
+| `MemTotal` | 31.22 GiB — the ~0.78 GiB difference is BIOS-e820 reserved, kernel and PCI |
 | Internal storage | Samsung SSD 990 PRO 2 TB (`nvme0n1`), APFS container + Linux btrfs — **VERIFIED** |
 | External storage | HP P900 1 TB USB (`sda`) — **VERIFIED** |
 

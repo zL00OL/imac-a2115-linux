@@ -14,7 +14,7 @@ UNTESTED in the page that discusses it.
 | **CPU** | Intel Core i5-8500 — **VERIFIED** |
 | **GPU** | Radeon RX 570X (Ellesmere, `polaris10`, 4 GiB), subsystem Apple `[106b:019e]` — **VERIFIED** |
 | **iGPU** | Intel UHD 630 `8086:3e92` at `00:02.0`, `i915` bound — **VERIFIED** |
-| **RAM / storage** | 31 GiB; Samsung SSD 990 PRO 2 TB + HP P900 1 TB USB — **VERIFIED** |
+| **RAM / storage** | 32 GB (2 × 16 GiB, 2667 MT/s); Samsung SSD 990 PRO 2 TB + HP P900 1 TB USB — **VERIFIED** |
 | **Distro** | openSUSE Tumbleweed-Slowroll — **VERIFIED** |
 | **Kernel** | 7.2.7-1-default — **VERIFIED** |
 | **Desktop** | KDE Plasma 6 on Wayland — **VERIFIED** |
