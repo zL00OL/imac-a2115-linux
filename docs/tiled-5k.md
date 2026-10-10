@@ -19,7 +19,7 @@ and tells you which section below applies.
 
 > **Verified 2026-10-09 on the reference machine, now running `7.2.7-1-default`.**
 > Upstream `amdgpu` gained native `tiled_stitch` between 7.2.2 and 7.2.7, and
-> **the SUSE binary module for 7.2.7 ships it** — an earlier version of this
+> **the SUSE binary module for 7.2.7 ships it** — a claim you will find
 > document claimed the shipped module lacked it and had to be rebuilt from
 > source. That is wrong, and the measurement is below.
 
@@ -191,7 +191,7 @@ the rest.
 > [!NOTE]
 > **The `sysfs` readback for `tiled_stitch` is unverified.** The kernel command
 > line is the authoritative value on this machine: `amdgpu.tiled_stitch=-1`.
-> Earlier revisions of this file told readers to expect `1` from the `sysfs`
+> You may find claims that `1` is the expected `sysfs`
 > parameter while the command line said `-1`, which is a contradiction nobody
 > resolved. If the parameter is declared `bool` in the driver, `-1` and `1` both
 > normalise to `1` on read and the old comment was accidentally right; if it is
@@ -447,9 +447,9 @@ displacement across the midline. This needs a **patched** `amdgpu` — built fro
 beyond what the patch itself does.
 
 The next section is the authority on which driver is actually loaded and how to
-confirm it on your own machine. Read it before changing anything: an earlier
-revision of this file claimed the stock driver was sufficient, which was wrong
-and would have cost a reader the second tile.
+confirm it on your own machine. Read it before changing anything: the claim that
+the stock driver is sufficient is wrong, and acting on it costs you the second
+tile.
 
 If someone reproduces this on similar hardware and *does* see a seam, the checks
 in section 3 are still the right starting point — but note that this machine did
@@ -465,8 +465,8 @@ This is the load-bearing fact for everything above, and it is worth stating
 plainly because getting it wrong is expensive: **the stock driver cannot do
 this.**
 
-Earlier revisions of this file claimed the seamless 5K came from the stock driver
-plus `amdgpu.tiled_stitch=1`. That was wrong, and the evidence is unambiguous:
+A common claim is that the seamless 5K comes from the stock driver plus
+`amdgpu.tiled_stitch=1`. That is wrong, and the evidence is unambiguous:
 
 ```
 loaded  /sys/module/amdgpu/srcversion  : 6BE242C1C62DD79046F2E9A

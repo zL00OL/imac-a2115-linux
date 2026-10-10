@@ -10,6 +10,18 @@
 > redistributing them inside a product needs the terms confirmed with the
 > upstream authors first. Full detail in
 > [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md#licensing-of-the-vendored-patches--unresolved).
+  (GitHub's anchor for the `⚠ Licensing…` heading drops the glyph.)
+
+## Vocabulary
+
+Two terms appear everywhere below and are worth defining once:
+
+- **ESP** — the EFI System Partition, `/boot/efi` (p1). **197 MiB**, and it holds
+  exactly **one** kernel+initrd pair. This is the binding constraint on updates:
+  two kernels do not fit, and this is why a kernel update has to prune carefully.
+- **XBOOTLDR** — a second FAT partition, `/boot/efi-xbootldr` (p6), 3.8 GiB, used
+  for staging. systemd-boot on this machine reads **only the ESP**, so anything
+  placed solely on XBOOTLDR is not bootable.
 
 ## Before you start: this is one machine, one distro
 
@@ -174,8 +186,7 @@ amdgpu.tiled_stitch=-1    # tile the two links into one framebuffer  (verified w
 ```
 
 `-1` is the value this machine boots with and the value verified to produce the
-5120x2880 output. Earlier revisions of these docs said `=1`; that value has
-**never been tested here**, so treat it as unverified rather than as an
+5120x2880 output. `=1` has **never been tested here** — do not treat it as an
 alternative. If you are reproducing this, use `-1`.
 
 The parameter is applied when the kernel command line is parsed, so a change
@@ -286,11 +297,11 @@ the git history if you want them back.
   link-training loops. **Still unfixed.** A patch that appears to address it
   exists — see `docs/kernel-updates.md` — but it is not yet built or verified
   here.
-- **Microphone: capture exists, but PipeWire delivers silence.** Corrected
-  2026-10-10. This used to say "the CS8409 exposes no capture device at all",
-  which was wrong and cost real time. ALSA capture on the internal codec works
-  fine (`arecord -D hw:0,0` gives clean signal), so neither the hardware nor the
-  patched codec is the problem. Two separate faults turned out to be in the way:
+- **Microphone: capture exists, but PipeWire delivers silence.** ALSA capture on
+  the internal codec works fine (`arecord -D hw:0,0` gives clean signal), so
+  neither the hardware nor the patched codec is the problem. Note that the codec
+  *does* expose a capture device — "the CS8409 exposes no capture at all" is a
+  common and costly misdiagnosis. Two faults sit in the way:
   a WirePlumber profile left the card playback-only so no mic node existed, and
   the gain was set ~43 dB too low. The node now exists, but app-level capture
   through PipeWire still returns digital silence. Open. See

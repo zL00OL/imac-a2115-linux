@@ -145,7 +145,7 @@ Result on this kernel: **exactly 14 bytes changed**, all inside the slot, image
 size identical, and the written bytes verified by read-back. More or fewer
 differing bytes means something else was touched.
 
-The kernel is patched **in place**. An earlier version copied it to
+The kernel is patched **in place**. Copying it to
 `linux-setos` and kept both; that does not fit alongside a new install on a
 197 MiB ESP, and a truncated `linux-setos` was the result.
 
@@ -298,7 +298,7 @@ speakers and microphones with it. `/etc/modprobe.d/99-imac-audio-gpu-bind.conf`
 sets `gpu_bind=0` to prevent exactly this.
 
 **This is no longer hypothetical, and the trade has already been made in favour
-of audio.** An earlier version of this page said `gpu_bind=0` was "presently a
+of audio.** Claims that `gpu_bind=0` is "presently a
 no-op" because the iGPU was not enumerated. That was true when written and is now
 wrong: the iGPU is bound, `gpu_bind=0` is live, and audio is working because of
 it. Verified after the set_os boot:
@@ -395,9 +395,9 @@ initrd   78.2 MiB      (a microcode-less dracut image)
 one pair 94.9 MiB   of 197 MiB
 ```
 
-Two pairs *almost* fit, which is the trap. An earlier design kept a stock kernel
-**and** a patched `linux-setos` copy, and pruned the old version *before* the new
-one was written. In testing that produced:
+Two pairs *almost* fit, which is the trap. Keeping a stock kernel **and** a
+patched `linux-setos` copy, and pruning the old version *before* the new one is
+written, produces:
 
 ```
 cp: error copying ... to .../linux-setos: No space left on device

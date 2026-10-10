@@ -41,7 +41,7 @@ the machine.
 **This machine previously ran `7.2.2-1-default`.** It has since moved to
 `7.2.7-1-default`, and that move changed the picture substantially: `tiled_stitch`
 is now upstream, so most of the vendored patch stack is no longer required. See
-[The patches](#patches) below for exactly what is still needed.
+[The patches](#all-six-are-still-needed) below for exactly what is still needed.
 
 Earlier kernel: `7.2.2-1-default`. Anything in this repository that names
 `7.2.2` and is not explicitly historical describes a configuration the machine

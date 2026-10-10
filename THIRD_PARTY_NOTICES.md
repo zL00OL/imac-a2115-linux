@@ -129,7 +129,9 @@ Recorded because they are the most useful part of the history:
 **verbatim, with its logging intact**, and is therefore a derivative of that
 work.
 
-### ⚠ Licensing of the vendored patches — unresolved
+### Licensing of the vendored patches — unresolved
+
+<a id="licensing-of-the-vendored-patches--unresolved"></a>
 
 **None of the six patch files carries a licence header, an SPDX identifier, or a
 copyright line.** `patches/amdgpu-5k/README.md` records their pinned upstream

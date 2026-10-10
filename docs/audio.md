@@ -37,7 +37,7 @@ Everything here was measured on openSUSE **Slowroll** (see
 | Section | |
 |---|---|
 | [Headset (EarPods) microphone](#headset-earpods-microphone--fixed-2026-10-07) | capture that was silent for a day |
-| [Internal microphone level](#internal-microphone-level--fixed-2026-10-07) | a gain control that clipped at 0 dBFS |
+| [Internal microphone](#internal-microphone--two-faults-2026-10-10) | no PipeWire node at all, plus a gain control that clipped at 0 dBFS |
 | [Turning the driver's logging on](#turning-the-drivers-logging-on--the-diagnostic-that-finally-worked) | `MYSOUNDDEBUG`, and why `dmesg` as a normal user lies |
 | [Audio — FIXED](#audio--fixed-tweeters--woofers-verified-2026-10-03) | the working configuration |
 | [Audio: earlier diagnosis](#audio-earlier-diagnosis-kept-for-the-record) | superseded, kept for the record |
@@ -560,7 +560,7 @@ options snd_hda_intel power_save=0 power_save_controller=N
 
 **The 4-channel forcing is not.** It configures the `analog-surround-40`
 enumeration, which is the faulty one. The internal codec should stay at
-`analog-stereo`; see [Speakers](#speakers).
+`analog-stereo`; see [Internal speakers](#internal-speakers--what-actually-works-and-why-the-eq-cannot-be-applied).
 
 ### The DKMS build trap (why davidjo appeared not to work here)
 

@@ -110,13 +110,12 @@ grep tiled_stitch /proc/cmdline                          # expect -1
 cat /sys/module/amdgpu/parameters/tiled_stitch           # expect -1
 ```
 
-Both read `-1` on the reference system — see `docs/tiled-5k.md`. An earlier
-revision of this page said to expect `1`; that was wrong, and `1` has never been
-verified here.
+Both read `-1` on the reference system — see `docs/tiled-5k.md`. Expect `1` to
+be wrong: it has never been verified here.
 
-**A patched `amdgpu` is required.** An earlier revision of this page said "no
-patched driver" was needed, and that was also wrong — a stock `amdgpu` has no
-`tiled_stitch` parameter at all, so there is nothing to set. The six patches in
+**A patched `amdgpu` is required.** You may read that no patched driver is
+needed — that is wrong. A stock `amdgpu` has no `tiled_stitch` parameter at all,
+so there is nothing to set. The six patches in
 `patches/amdgpu-5k/` and the patched initramfs are the whole point; see
 `docs/tiled-5k.md` and `docs/recovery.md`.
 
@@ -152,4 +151,4 @@ amdgpu-stackC-async.ko
 
 Known-bad, and must never be installed or loaded.
 
-An earlier revision of this file called the patched driver a misdiagnosis. It was not — the patched driver is what runs. `docs/hardware.md` records the measurement that settles it; see `docs/hardware.md#the-amdgpu-that-is-actually-loaded`.
+The patched driver is not a misdiagnosis — it is what runs. `docs/hardware.md` records the measurement that settles it; see `docs/hardware.md#the-amdgpu-that-is-actually-loaded`.
