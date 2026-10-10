@@ -64,8 +64,12 @@ say "=== imac-reapply $(date -Is)  mode=$([ $CHECK -eq 1 ] && echo check || echo
 # This machine has two EFI partitions. The BLS entries live on XBOOTLDR and the
 # ESP's entries directory is empty, so a hardcoded ESP path silently finds
 # nothing. Detect it once instead. See docs/recovery.md.
+# The bootloader reads ONLY the ESP on this machine. The XBOOTLDR can hold a
+# stale entry naming content-hashed files, and reading it first reported
+# "MISSING linux-0aba6694..." on a machine that boots perfectly. Check the
+# partition the firmware actually uses.
 ENTRYDIR=""
-for d in /boot/efi-xbootldr/loader/entries "$ENTRYDIR" \
+for d in /boot/efi/loader/entries /boot/efi-xbootldr/loader/entries \
          /boot/efi/opensuse/loader/entries; do
   [ -d "$d" ] || continue
   if [ -n "$(ls -1 "$d"/*.conf 2>/dev/null)" ]; then ENTRYDIR=$d; break; fi
@@ -159,15 +163,26 @@ say ""; say "[audio]"
 PS=$(cat /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null)
 PSC=$(cat /sys/module/snd_hda_intel/parameters/power_save_controller 2>/dev/null)
 say "  snd_hda_intel power_save=${PS:-?} power_save_controller=${PSC:-?}"
-if [ "$PS" = "N" ] && [ "$PSC" = "N" ]; then
+# Both of these export a boolean, and the textual form is NOT stable across
+# kernel versions: older ones print "N"/"Y", current ones print "0"/"1". This
+# compared against "N" only, so on 7.2.8 - where the machine is correctly
+# configured with power_save=0 - it reported a FAIL and told the user their
+# speakers may be silent. Accept either representation.
+off(){ case "$1" in 0|N|n|no|off|"") return 0 ;; *) return 1 ;; esac; }
+if off "$PS" && off "$PSC"; then
   ok "HDA runtime power management disabled"
 else
   bad "HDA runtime power management is ENABLED - internal speakers may be silent"
-  hint "sudo ~/bin/imac-audio-fix   # writes /etc/modprobe.d/99-imac-audio.conf"
+  hint "sudo imac-audio-fix   # writes /etc/modprobe.d/99-imac-audio.conf"
 fi
 
 # --- codec module: this is what actually decides whether speakers work ---
-if dkms status 2>/dev/null | grep -qi snd_hda_macbookpro; then
+  # Capture dkms output before grepping it. `dkms status | grep -q` can report
+  # failure on a match, because grep -q exits at the first hit and dkms status
+  # takes SIGPIPE - which made this report "no DKMS codec registered" on a
+  # machine with two installed.
+  DKMS_Q=$(dkms status 2>/dev/null)
+  if printf '%s' "$DKMS_Q" | grep -qi snd_hda_macbookpro; then
   # Not a fault. The loaded snd_hda_codec_cs8409 IS this DKMS build. Expecting
   # its absence here would flag a correctly configured machine.
   #
@@ -188,27 +203,37 @@ case "$RESOLVED" in
 esac
 # Check DKMS directly. scripts/imac-audio-module is retired; it inspected an
 # ext01 layout that DKMS beats. See scripts/imac-audio and docs/audio.md.
-if dkms status 2>/dev/null | grep -qi macbookpro; then
-  dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/  /'
-else
+DKMS_ALL=$(dkms status 2>/dev/null)
+  if printf '%s' "$DKMS_ALL" | grep -qi macbookpro; then
+    printf '%s\n' "$DKMS_ALL" | grep -i macbookpro | sed 's/^/  /'
+  else
   warn "no DKMS codec registered for the CS8409"
   hint "sudo scripts/imac-audio --install   # see docs/audio.md"
 fi
 
 # --- PipeWire routing ---
+#
+# The expected state is that this file does NOT exist. It was a 6-stage crossover
+# EQ, and PipeWire's filter-chain module fails to initialise on this machine - with
+# nofail it fails silently, so audio bypasses the EQ while every tool reports
+# success. It was deliberately disabled and renamed to *.disabled-by-imac-audio-fix.
+# See docs/audio.md.
+#
+# This check used to treat the file's absence as a FAIL, which meant a correctly
+# configured machine - the EQ removed on purpose - reported a broken audio chain.
+# Inverting it: absent is correct, present is the thing to warn about.
 A=$UHOME/.config/pipewire/pipewire.conf.d/90-imac-speakers.conf
 if [ -f "$A" ]; then
-  U=$(grep -c 'Mult" = 1\.0' "$A")
-  if [ "$U" = "6" ]; then ok "6/6 linear stages at unity gain"
-  else warn "$U/6 linear stages at unity"; hint "sed -i 's/\"Mult\" = [0-9.]*/\"Mult\" = 1.0/' $A"; fi
-  say "  nodes: $(grep -c 'type = builtin' "$A")"
+  warn "the crossover EQ is ACTIVE - filter-chain does not work here, so it will"
+  warn "bypass silently while every tool reports success"
+  hint "mv $A $A.disabled-by-imac-audio-fix"
+else
+  ok "no EQ filter-chain in play (correct - it does not work on this machine)"
   if [ "$CHECK" -eq 0 ]; then
     V=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
     [ -n "$V" ] && say "  sink: $V"
     case "$V" in *MUTED*) warn "sink is MUTED - unmute before judging audio" ;; esac
   fi
-else
-  bad "audio chain missing: $A"
 fi
 
 #------------------------------------------------------------------------- SDDM

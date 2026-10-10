@@ -360,7 +360,8 @@ if [ -z "$DKMS_LINE" ]; then
   hint "see docs/audio.md for the driver source and build guards"
 else
   ok "DKMS codec registered: $DKMS_LINE"
-  if dkms status 2>/dev/null | grep -qi ", $NEWEST2,"; then
+  DKMS_N=$(dkms status 2>/dev/null)
+  if printf '%s' "$DKMS_N" | grep -q ", $NEWEST2,"; then
     ok "a build exists for $NEWEST2 (the kernel about to boot)"
   else
     warn "no DKMS build listed for $NEWEST2 yet"
