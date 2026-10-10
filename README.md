@@ -18,7 +18,8 @@ UNTESTED in the page that discusses it.
 | **Distro** | openSUSE Tumbleweed-Slowroll — **VERIFIED** |
 | **Kernel** | 7.2.8-1-default, all six 5K patches applied — **VERIFIED** |
 | **Desktop** | KDE Plasma 6 on Wayland — **VERIFIED** |
-| **Display** | 5120×2880 seamless, `amdgpu.tiled_stitch=-1` — **VERIFIED** |
+| **Display** | 5120×2880, one CRTC driving both tiles, `amdgpu.tiled_stitch=-1` — **VERIFIED** |
+| **Tile genlock** | **UNTESTED** — tiling is configured correctly; scanout phase never measured |
 | **Audio codec** | DKMS `snd-hda-macbookpro/0.2` — **VERIFIED** |
 | **Internal speakers** | 2-channel `analog-stereo` — **VERIFIED** |
 | **Hardware encode** | iGPU H.264/HEVC/VP8 via VA-API on `/dev/dri/by-path/pci-0000:00:02.0-render` — **VERIFIED** |
@@ -40,29 +41,38 @@ they will not apply and must be re-ported by a human. See
 
 
 > [!IMPORTANT]
-> **The 5K panel needs a patched `amdgpu`, and it is not stock.** This was
-> previously documented as stock and was wrong. The patched module is embedded
-> inside the custom `initrd-stackC` initramfs (`--add-drivers 'amdgpu'`), which
-> is why the copies under `/lib/modules` all look stock and `rpm -V` reports
-> the kernel package intact. See `docs/tiled-5k.md` for how to confirm which
-> module is actually loaded. Do **not** additionally install a patched
-> `amdgpu.ko` into `/lib/modules` — the initramfs one is already in use.
-> Anything named `amdgpu-stackC-*.ko` is a leftover; the `async` variant is
-> known-bad. See `docs/hardware.md#the-amdgpu-that-is-actually-loaded`.
+> **The 5K panel needs a patched `amdgpu`, and it is not stock.** It is
+> installed as a normal module in
+> `/usr/lib/modules/$(uname -r)/updates/amdgpu.ko.zst`, built from the
+> six-patch stack in `patches/amdgpu-5k/`, `depmod`-ed so it wins over the
+> in-tree copy, and carried into the initramfs by dracut. There is no
+> `initrd-stackC` on this machine any more — that was the 7.2.2-era layout.
 >
-> **Rebuilding or replacing `initrd-stackC` is the single most destructive
-> thing you can do to this machine.** A stock `amdgpu` has no `tiled_stitch`
-> parameter at all, so losing that initramfs costs you the second tile and the
-> 5120x2880 desktop — and on a cold-boot failure that can mean no display at
-> all. Back it up first, and confirm you can restore it before you start:
+> Confirm what is actually loaded, because a stock driver boots a perfectly
+> healthy display at the wrong resolution and logs nothing:
 >
 > ```bash
-> # backup (do this before touching anything)
-> # named explicitly from the running kernel: a /*/ glob would pass several
-> # sources to a file destination and fail if you ever have two kernels on the ESP
-> sudo cp -p "/boot/efi/opensuse-slowroll/$(uname -r)/initrd-stackC" ~/initrd-stackC.backup
-> # confirm you can read it back and that the ESP has room for a copy
-> ls -lh ~/initrd-stackC.backup; df -h /boot/efi
+> cat /sys/module/amdgpu/srcversion    # 31F26E96354E3264CF28120 = ours (7.2.8)
+>                                     # 6A1BCCFD6F2E5A1A8F4807D = ours (7.2.7)
+>                                     # 4BFAA1013BED7E3FB557CF0 = stock
+> modinfo -n amdgpu                   # .../updates/ = ours;  .../kernel/ = stock
+> modinfo -p amdgpu | grep -c tiled_stitch   # must be 1
+> ```
+>
+> A stock `amdgpu` has **no `tiled_stitch` parameter at all**, which is why
+> `docs/tiled-5k.md` insists on decompressing `.zst` modules before asking
+> `modinfo` about them — `modinfo -p` on a compressed file prints nothing, which
+> reads as "absent" when it only means "unreadable".
+>
+> **Rebuilding the initramfs is the single most destructive thing you can do to
+> this machine.** The one the package builds contains neither patched module,
+> so it boots without the second tile and without the DKMS codec. See
+> `docs/boot-layout.md` for the full sequence, and back up first:
+>
+> ```bash
+> I=/boot/efi/opensuse-slowroll/$(uname -r)/initrd
+> sudo cp -p "$I" ~/initrd.backup
+> lsinitrd "$I" | grep -cE 'updates/amdgpu|updates/snd-hda-codec-cs8409'  # must be 2
 > ```
 
 ---
@@ -178,11 +188,16 @@ AMD graphics team.
 
 ## Status
 
-**Tiled 5K: working, and seamless is confirmed** — one 5120x2880 desktop with no
-visible gap or displacement across the midline. This depends on a **patched
-`amdgpu` carried inside the custom `initrd-stackC`** plus
-`amdgpu.tiled_stitch=-1`. It is not stock, and rebuilding or replacing that
-initramfs is the single most destructive thing you can do to this machine.
+**Tiled 5K: working as a configuration, genlock unmeasured.** One 5120x2880
+desktop, one CRTC driving both tiles, correct 2560x2880 tile timing on both
+links, `tiled_stitch=-1`, no GPU resets. That depends on a **patched `amdgpu` in
+`updates/`** plus a rebuilt initramfs, not on stock driver code.
+
+"Genlock unmeasured" is deliberate: the tiling is verifiably configured, but
+whether the two links are scanout-synchronised has never been measured, and
+there is no read-only way to ask. `docs/tiled-5k.md` has the log evidence and
+the measurement tiers. Rebuilding the initramfs remains the single most
+destructive thing you can do to this machine — see `docs/boot-layout.md`.
 
 **Audio: working, and verified rather than assumed.** The internal speakers play
 on the 2-channel `analog-stereo` enumeration, with no configuration change

@@ -549,3 +549,116 @@ Until this is fixed, treat a long dark or bright screen after power-on as
 **normal, not a hang**: leave it alone. It resolved itself once. Forcing a
 power cycle is what risks losing access.
 
+
+## Measured state on 7.2.8, and how far this goes
+
+> Measured 2026-10-10 on `7.2.8-1-default` (`amdgpu` srcversion
+> `31F26E96354E3264CF28120`). All of this is read out of the live system, not
+> inferred from the source.
+
+### The stitch path is fully engaged
+
+From `dmesg` at boot:
+
+```
+TILED_STITCH: synthesized root EDID for eDP-1 from source vendor=06 10 product=0xae26 name="iMac"
+TILED_STITCH: exposed only stitched mode 5120x2880 on eDP-1 (tile 2560x2880)
+TILED_STITCH: forced root stream to 2560x2880 tile timing (crtc mode is 5120x2880)
+TILED_STITCH: crtc=71 root link[0] stream timing 2560x2880 total 2720x2962 pixclk_100hz=4832500
+TILED_STITCH: added peer slave-tile stream link[1] 2560x2880 (one crtc drives both tiles)
+TILED_STITCH: forcing initial modeset so both tiles are live before first paint
+TILED_STITCH: kept synthesized stitched mode 5120x2880 on eDP-1 (tile 2560x2880)
+```
+
+One CRTC drives both tiles, the root stream is forced to tile timing, and both
+links come up. Panel reports `connected` at `5120x2880`, with `card2-DP-4/5/6`
+all disconnected — the slave tile is correctly *not* exposed as its own output.
+
+### Genlock is NOT confirmed
+
+This is the gap. `amdgpu_dm_force_timing_sync` reads `0`, and `dmesg` contains
+**no** genlock, `sync_enabled`, per-frame CRTC reset or vblank-sync messages.
+So the software asserts tiling is configured; nothing in the logs states the
+two links are scanout-synchronised.
+
+What that means: "one seamless 5120x2880 desktop" is verified as a
+**configuration** fact — one connector, one CRTC, two tiles, correct timing.
+Whether the two halves are **genlocked in phase** is unverified, and that is
+exactly what a visible seam during scrolling would be.
+
+The debugfs handle exists and is writable:
+
+```bash
+cat /sys/kernel/debug/dri/0000:01:00.0/amdgpu_dm_force_timing_sync   # 0
+```
+
+Writing `1` forces per-frame CRTC reset. That is a *forcing* switch, not a
+readout of the current state — there is no read-only way to ask "are these two
+links currently in sync". Confirming genlock therefore needs **Tier 1
+measurement**, not a sysfs value.
+
+### Measuring it properly
+
+**Tier 1 — high-speed camera.** 1000+ fps, shutter open long enough to span a
+frame. Display a pattern that encodes its own frame number or a unique moving
+marker crossing y=1440. If the seam is genlocked, the marker is one unbroken
+edge; if not, it is stepped, displaced or duplicated across the midline.
+
+**Tier 2 — LED strobe.** A pulsed LED bar photographed with a long exposure.
+The pulse is far shorter than a frame, so it renders as a thin line at the exact
+scan position; tearing shows as two lines. This is the cheapest rig that
+reaches rigour, and is how panel makers validate scanout.
+
+**Tier 3 — software, no camera.** Frame pacing and missed frames via
+`presentmon -a`; KWin presentation logging via
+`QSG_RENDER_LOOP=basic QT_LOGGING_RULES='qt.scenegraph.general=true'`.
+These prove frames are being dropped, which is a different question from whether
+the two tiles are in phase.
+
+None of these can answer the genlock question on its own. Tier 3 shows *that*
+frames are lost; only Tier 1 or 2 shows *where on the panel* they are lost.
+
+## Boot log findings (7.2.8, one boot, 58 min)
+
+| Item | State |
+|---|---|
+| amdgpu GPU resets | **0** |
+| Failed units | **0** |
+| Panel | `connected`, `5120x2880` |
+| `tiled_stitch` | `-1` |
+| i915 VBT | `Failed to find VBIOS tables (VBT)`, then `DDI A/PHY A failed to retrieve link info, disabling eDP` |
+
+**The i915 messages are expected and harmless.** They are the phantom-connector
+case described in `docs/igpu-and-quicksync.md`: with no VBT, i915 invents a port
+and immediately disables it. i915 renders nothing — amdgpu owns the panel — so
+this costs nothing but log noise.
+
+**One transient during the session, self-recovered:**
+
+```
+[2184.908951] amdgpu: enabling link 1 failed: 15
+```
+
+`link 1` is the peer slave-tile link. The surrounding `TILED_STITCH` lines show
+it was immediately re-added, and the panel stayed at `5120x2880` with zero GPU
+resets. This is a link re-enable attempt, not a reset; worth watching if it ever
+recurs more than once.
+
+**One kernel oops, caused by reading debugfs:**
+
+```
+BUG: kernel NULL pointer dereference
+RIP: dmub_trace_mask_show+0x37 [amdgpu]
+Oops: ... Comm: grep  Tainted: G OE
+Call Trace: simple_attr_read -> debugfs_attr_read -> vfs_read
+```
+
+`dmub_trace_mask_show` is an amdgpu debugfs handler. Scanning every file under
+`/sys/kernel/debug/dri/0000:01:00.0/` with `grep` reads that attribute and hits
+a null deref inside the handler. No data is at risk — it is a read path — but
+**do not brute-force `grep` across `/sys/kernel/debug/dri/*`**, and read the
+specific files you want instead.
+
+The `Tainted: G OE` is the expected consequence of loading an out-of-tree,
+unsigned `amdgpu`: `O` = out-of-tree, `E` = unsigned module. That is the price
+of the 5K patches and is not itself a fault.

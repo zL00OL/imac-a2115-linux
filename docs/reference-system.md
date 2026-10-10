@@ -284,7 +284,7 @@ Stated plainly so these are never mistaken for working features:
 
 | Item | Status |
 |---|---|
-| Display tearing | **UNTESTED** — never measured |
+| Tile seam (genlock in phase) | **UNTESTED** — tiling verified as configuration; scanout sync unmeasured, see `docs/tiled-5k.md` |
 | Cold-boot 5K initialisation | **BROKEN** — insufficient AUX-wake retry budget; the retry bump in the lean-core patch has not fixed it here |
 | Backlight control | **VERIFIED** |
 | GPU OpenCL (Resolve) | **VERIFIED** |
