@@ -323,11 +323,27 @@ else
   unk "no $BLS - is this an ESP-mounted system?"
 fi
 AVAIL=$(df -m --output=avail /boot/efi 2>/dev/null | tail -1 | tr -d ' ')
-if [ -n "$AVAIL" ]; then
-  if   [ "$AVAIL" -ge 120 ]; then ok "ESP has ${AVAIL}M free"
-  elif [ "$AVAIL" -ge 45 ];  then warn "ESP has ${AVAIL}M free - below the 120M a kernel update wants"
-  else no "ESP has only ${AVAIL}M free - below the 45M an ordinary update needs"
-       info "imac-update will refuse; prune old BLS entries first"
+ESPSZ=$(df -m --output=size /boot/efi 2>/dev/null | tail -1 | tr -d ' ')
+if [ -n "$AVAIL" ] && [ -n "$ESPSZ" ]; then
+  # The question is not "is there room for a second kernel pair now" - two pairs
+  # never fit and never will. It is "will there be room after the ESP is
+  # emptied", because imac-update copies the running pair to the XBOOTLDR,
+  # verifies it, and only then removes it from the ESP. 150M is what that leaves.
+  #
+  # An earlier version of this check compared AVAIL against 120 and warned at
+  # 93M free, which is exactly the state a healthy machine sits in permanently:
+  # the running pair occupies 98M and nothing else is ever there.
+  if   [ "$AVAIL" -ge 120 ]; then
+    ok "ESP has ${AVAIL}M free (of ${ESPSZ}M)"
+  elif [ "$ESPSZ" -ge 150 ] && [ "$AVAIL" -ge 45 ]; then
+    ok "ESP has ${AVAIL}M free of ${ESPSZ}M - room for one kernel pair after imac-update empties it"
+    info "a second pair never fits; that is why the rollback pair lives on the XBOOTLDR"
+  elif [ "$AVAIL" -ge 45 ]; then
+    warn "ESP has ${AVAIL}M free of ${ESPSZ}M - an ordinary update fits, a kernel pair may not"
+    info "check nothing unexpected is squatting in /boot/efi: du -sh /boot/efi/*"
+  else
+    no "ESP has only ${AVAIL}M free of ${ESPSZ}M - below the 45M an ordinary update needs"
+    info "imac-update will refuse; find what is using the space first"
   fi
 fi
 

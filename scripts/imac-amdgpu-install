@@ -58,14 +58,25 @@ if [ -z "$PATCHDIR" ]; then
 fi
 LOG=${IMAC_AMDGPU_LOG:-/var/log/imac-amdgpu.log}
 
-KVER=""; MODE=build
-case "${1:-}" in
-  --check)  MODE=check ;;
-  --dry-run) MODE=dry ;;
-  --kver)    KVER="${2:-}"; shift ;;
-  --kver=*)  KVER="${1#--kver=}" ;;
-esac
-[ -n "$KVER" ] || KVER=$(uname -r)
+  # Parse every argument, not just the first. This previously handled only $1,
+  # so `--check --kver 9.9.9-1-default` silently ignored the kernel and reported
+  # on `uname -r` instead - which made it useless as a pre-reboot gate, since it
+  # would answer "fine" about the running kernel while the NEW kernel was still
+  # unbuilt.
+  KVER=""
+  MODE=build
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check)   MODE=check ;;
+      --dry-run) MODE=dry ;;
+      --kver)    KVER="${2:-}"; shift ;;
+      --kver=*)  KVER="${1#--kver=}" ;;
+      --help|-h) sed -n '2,20p' "$0" | sed 's/^# \?//'; exit 0 ;;
+      *) echo "imac-amdgpu-install: unknown argument '$1'" >&2; exit 2 ;;
+    esac
+    shift
+  done
+  [ -n "$KVER" ] || KVER=$(uname -r)
 
 say(){ printf '%s\n' "$*" | tee -a "$LOG"; }
 step(){ say ""; say "=== $* ==="; }
@@ -116,6 +127,7 @@ mod_srcversion(){
 }
 
 if [ "$MODE" = check ]; then
+  say "  checking: $KVER"
   SV=$(mod_srcversion) || { say "  no amdgpu in updates/ for $KVER"; exit 1; }
   say "  srcversion: $SV"
   case "$SV" in

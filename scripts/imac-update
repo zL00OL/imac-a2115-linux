@@ -392,13 +392,65 @@ step "7. final verification"
   || say "  all checks pass"
 
 #------------------------------------------------------------------ 8. reboot
+#
+# This is the one step that can cost the display, so the gate is here rather
+# than in the documentation. A stock amdgpu has no tiled_stitch parameter and
+# boots ONE tile with nothing logged as an error - you only find out by looking
+# at the screen, which is exactly what --reboot skips.
+#
+# The build is detached and takes 20-45 minutes, so "not ready yet" is the
+# normal case for a minute or two after zypper returns. Offer to wait for it
+# rather than refusing outright.
+if [ "$DO_REBOOT" -eq 1 ] && [ "$WANT_KERNEL" -eq 1 ]; then
+  step "8. reboot gate"
+  AMDGPU=/usr/local/libexec/imac-amdgpu-install
+  [ -x "$AMDGPU" ] || AMDGPU="$BIN/imac-amdgpu-install"
+  if [ ! -x "$AMDGPU" ]; then
+    warn "cannot find imac-amdgpu-install; cannot verify the 5K module is built"
+  else
+    TRIED=0
+    while :; do
+      # Fail CLOSED. An earlier version of this gate tested for the string
+      # "not the stock module", which meant any error from imac-amdgpu-install -
+      # missing binary, unbuilt module, no such kernel - fell through to
+      # "not ready" and then, on Enter, to a reboot anyway. Wrong direction.
+      # Only an explicit "not stock" plus a zero exit means ready.
+      OUT=$("$AMDGPU" --check --kver "$NEWEST2" 2>&1); RC=$?
+      if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "not the stock module"; then
+        ok "patched amdgpu present for $NEWEST2"
+        break
+      fi
+      if [ "$RC" -ne 0 ]; then
+        say "  check failed (exit $RC): $(printf '%s' "$OUT" | tail -1)"
+      fi
+      TRIED=$((TRIED+1))
+      if [ "$TRIED" -eq 1 ]; then
+        say "  the patched amdgpu build for $NEWEST2 is not finished."
+        say "  It is detached and takes 20-45 minutes. Rebooting now boots a"
+        say "  stock amdgpu: one tile, no error message, degraded display."
+        say ""
+        say "  press Enter to wait for it, or Ctrl-C to stop here and reboot later."
+        read -r _ || { say "  interrupted; not rebooting"; exit 0; }
+      fi
+      sleep 60
+      printf '.'
+    done
+    echo
+  fi
+fi
+
 if [ "$DO_REBOOT" -eq 1 ]; then
   say ""
   read -rp "Reboot now? [y/N] " a
   [ "$a" = "y" ] && { say "rebooting"; reboot; } || say "not rebooting"
 else
   say ""
-  say "No reboot performed. When you do reboot, verify the 5K tiled output."
+  if [ "$WANT_KERNEL" -eq 1 ]; then
+    say "No reboot performed. Before you do, confirm the build finished:"
+    say "  sudo /usr/local/libexec/imac-amdgpu-install --check --kver $NEWEST2"
+  else
+    say "No reboot performed. When you do reboot, verify the 5K tiled output."
+  fi
 fi
 
 say ""
