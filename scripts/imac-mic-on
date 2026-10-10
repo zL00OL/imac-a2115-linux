@@ -1,14 +1,47 @@
 #!/bin/bash
-# Enable the CS8409 internal microphone's capture switch.
+# Enable the CS8409 internal microphone and set a sane gain.
 #
-# Why: on every boot this codec comes up with 'Internal Mic Capture Switch'
-# = off,off, which makes PipeWire open the source and deliver pure silence.
-# Setting it by hand works, but it has to be redone every boot.
+# Why the switch: on this codec 'Internal Mic Capture Switch' is a mixer
+# control that gates the mic amp. It comes up 'on,on' by default and the
+# driver does NOT turn it off on this machine - verified stable across a
+# 20s watch and across every capture-prepare/stop cycle in dmesg. It is set
+# here anyway as cheap insurance, not because it is known to be needed.
 #
-# The card number moves (the internal codec is card 1 once the Intel iGPU is
-# published, card 0 when it is not), so it is detected rather than hardcoded.
+# Why the gain: the CODEC DEFAULTS clip. Capture Volume 63 + Boost 2 measured
+# peak 2147483392/2147483647 with 13526 clipped samples per 3s. This is a
+# built-in MEMS mic on an 8W enclosure; it does not need +32dB.
+#
+#   raw 63 + 20dB -> clipped
+#   raw 50 +  0dB -> clipped (1155 samples)
+#   raw 45 +  0dB -> clean, strong  <- previous choice
+#   raw 40 +  0dB -> clean, ~3.7x headroom over 45  <- CURRENT
+#   raw 30 +  0dB -> clean but quiet
+#   raw 20 +  0dB -> clean but ~20x too quiet to use  <- the old value
+#
+# The old script forced raw 20, which is -31dB. That is why the mic "did not
+# work": it was not muted, it was attenuated ~43dB below the codec default and
+# sat near the noise floor.
+#
+# PERMISSIONS - this is the reason it must run as root. These are not
+# normal mixer controls:
+#   Internal Mic Capture Switch    access=rw------   owner write only
+#   Internal Mic Capture Volume    access=rw---R--   READ ONLY
+#   Internal Mic Boost Volume      access=rw---R--   READ ONLY
+#   Digital Capture Volume         access=rw---RW-
+# Capture Volume and Boost are marked read-only to every user including root
+# via normal paths; only the driver's HDA verb path sets them. An unprivileged
+# amixer appears to succeed and changes nothing, which is how the old script
+# looked like it was working.
+#
+# The card number moves (internal codec is card 0 or card 1 depending on
+# whether the Intel iGPU is published), so it is detected rather than hardcoded.
 set -u
 export PATH=/usr/sbin:/usr/bin:/sbin
+
+CAPTURE_VOL=${IMAC_MIC_CAPTURE:-40}
+BOOST=${IMAC_MIC_BOOST:-0}
+DIGITAL=${IMAC_MIC_DIGITAL:-60}
+
 C=""
 # The codec can appear well after this runs (a user unit can start before the
 # HDA driver has probed), so wait for it rather than failing on the first miss.
@@ -20,9 +53,34 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 [ -n "$C" ] || { echo "imac-mic-on: no CS8409 codec found after waiting" >&2; exit 1; }
-amixer -c "$C" cset name="Internal Mic Capture Switch" on >/dev/null 2>&1
-amixer -c "$C" cset name="Internal Mic Capture Volume" 20,20 >/dev/null 2>&1
-amixer -c "$C" cset name="Internal Mic Boost Volume" 0,0 >/dev/null 2>&1
-amixer -c "$C" cset name="Digital Capture Volume" 60,60 >/dev/null 2>&1
-amixer -c "$C" cset name="Capture Source" 0 >/dev/null 2>&1
-echo "imac-mic-on: card $C, switch $(amixer -c $C contents 2>/dev/null | grep -A3 'Internal Mic Capture Switch' | grep ': values' | tr -s ' ')"
+
+# set_ctl NAME VALUE... ; fails loudly instead of discarding stderr.
+set_ctl(){
+  local name="$1"; shift
+  if ! amixer -c "$C" cset name="$name" "$@" >/dev/null 2>&1; then
+    echo "imac-mic-on: FAILED to set '$name' to $*" >&2
+    rc=1
+  fi
+}
+rc=0
+set_ctl "Internal Mic Capture Switch" on
+set_ctl "Internal Mic Capture Volume" "$CAPTURE_VOL,$CAPTURE_VOL"
+set_ctl "Internal Mic Boost Volume" "$BOOST,$BOOST"
+set_ctl "Digital Capture Volume" "$DIGITAL,$DIGITAL"
+set_ctl "Capture Source" 0
+
+# Verify, do not assume. Print what the codec actually holds afterwards.
+get(){ amixer -c "$C" contents 2>/dev/null | grep -A3 "name='$1'" | grep ': values' | cut -d= -f2; }
+echo "imac-mic-on: card $C"
+printf 'imac-mic-on:   switch=%s capture=%s boost=%s digital=%s\n' \
+  "$(get 'Internal Mic Capture Switch')" \
+  "$(get 'Internal Mic Capture Volume')" \
+  "$(get 'Internal Mic Boost Volume')" \
+  "$(get 'Digital Capture Volume')"
+
+# Verify against intent - a silent no-op here is the failure mode that
+# produced the original bug report.
+sw=$(get 'Internal Mic Capture Switch'); cv=$(get 'Internal Mic Capture Volume')
+case "$sw" in on,on) ;; *) echo "imac-mic-on: WARNING switch is '$sw'" >&2; rc=1 ;; esac
+[ "$cv" = "$CAPTURE_VOL,$CAPTURE_VOL" ] || { echo "imac-mic-on: WARNING capture volume is '$cv', wanted $CAPTURE_VOL" >&2; rc=1; }
+exit $rc

@@ -8,8 +8,11 @@
 >   [Headset (EarPods) microphone](#headset-earpods-microphone--fixed-2026-10-07).
 >   Confirm a patched module with
 >   `ls /sys/module/snd_hda_codec_cs8409/parameters | wc -l` → **10**.
-> - **Internal mic level: FIXED** — was clipping at −0.0 dBFS; needs
->   `Internal Mic Capture Volume` 20,20 and `Internal Mic Boost Volume` 0,0.
+> - **Internal mic: node now exists, capture still silent** — the card was
+>   stuck on a playback-only profile so no mic node existed at all. Profile is
+>   fixed at runtime; gain is 40,40 / boost 0. PipeWire-level capture is still
+>   returning digital silence. See
+>   [Internal microphone](#internal-microphone--two-faults-2026-10-10).
 > - **PipeWire capture on kernel 7.2.7: OPEN** — `arecord` works on both
 >   kernels, PipeWire only on 7.2.2. The driver's routing is provably correct;
 >   the fault is downstream. See the section above for the evidence.
@@ -175,28 +178,114 @@ not yet proven.
 microphone** — `arecord`/`parecord` work on both kernels, but PipeWire-native
 applications (OBS, browsers, Discord) need 7.2.2.
 
-## Internal microphone level — fixed 2026-10-07
+## Internal microphone — two faults, 2026-10-10
 
-The internal mic came up **clipping**: peak −0.0 dBFS, RMS −23.7 dBFS. Full-scale
-peaks are not a microphone signal. Setting the gain nodes directly fixes it:
+The mic was reported "not working". That turned out to be **two unrelated faults**,
+and the 2026-10-07 note above only ever addressed one of them — and got the
+direction of it wrong. Both are recorded here because the old note was the reason
+this took a while to find.
 
-| Control | Clipping | Working |
-|---|---|---|
-| `Internal Mic Capture Volume` | 63,63 | **20,20** |
-| `Internal Mic Boost Volume` | 2,2 | **0,0** |
+### Fault 1 (real, and the actual cause): the card had no capture node
 
-Result: **peak −28.2 dBFS, RMS −48.3 dBFS, 0% clipped.**
+This is why no application could open the built-in mic. It was not a mute and not
+a level problem.
 
-The patched driver adds `intmike_gain` (default `0x33`, i.e. 0 dB) as the ADC
-gain used before the mixer control exists. Once `Internal Mic Capture Volume`
-is present the control owns the amp, which is what makes the above work.
+```
+Active Profile: output:analog-stereo        ← sinks: 1, sources: 0
+Sources:
+ *  47. UMC204HD 192k Direct                 ← the USB interface, and only that
+```
 
-Note the asymmetry in what each number does: the headset mic needs all its
-available digital gain (`headset_mike_boost=1` plus `headset_mike_gain=12`,
-+32 dB combined) because the EarPods element is 31 dB quieter than the internal
-one. The internal mic needs almost none.
+`alsa_input.pci-0000_00_1f.3.analog-stereo` — the node the default source pointed
+at — **did not exist**. ALSA underneath was fine the whole time; `arecord -D
+hw:0,0` returned clean signal on demand. PipeWire simply never created the node,
+so nothing built on PipeWire could reach the microphone.
 
-`scripts/imac-verify` checks both.
+Cause: `~/.config/wireplumber/wireplumber.conf.d/51-imac-surround.conf` forced
+
+```lua
+monitor.alsa.rules = [ { matches = [ … ], actions = { update-props = { … } } } ]
+```
+
+WirePlumber **0.4 array syntax**. On 0.5+/1.6 this is not honoured, and the profile
+it half-applied produced a playback-only graph. The port itself is present and
+fine: `analog-input-internal-mic`, priority 8900. `pactl set-card-profile
+alsa_card.pci-0000_00_1f.3 output:analog-stereo+input:analog-stereo` creates the
+node immediately.
+
+The old rule asked for `output:analog-surround-40`. The internal speakers have
+never been 4-channel on this machine — they enumerate as 2-channel
+`analog-stereo` and work there — so that request bought nothing and cost the
+microphone.
+
+### Fault 2: the gain values
+
+Measured peak per 3s, `hw:0,0` direct, S32:
+
+| Capture Volume | Boost | Peak | Clipped |
+|---|---|---|---|
+| 63 | 2 (+20 dB) | 2147483392 | 13526 |
+| 50 | 0 | 2147483392 | 1155 |
+| 45 | 0 | 1393639424 | 0 |
+| **40** | **0** | **784498688** | **0** |
+| 30 | 0 | 251799552 | 0 |
+| 20 | 0 | 80262656 | 0 |
+
+The 2026-10-07 note recorded 20,20 / 0,0 as the fix for clipping. 20,20 does
+avoid clipping, but it is **~20x too quiet to use** (−28.5 dBFS peak). The clip
+fix and a usable level were conflated. Current setting is **40,40 with boost 0**,
+chosen by ear: ~−8.7 dBFS peak, no clipping.
+
+Codec defaults (63, 2) clip. `imac-mic-on` now sets 40 / 0.
+
+### The switch was never the problem
+
+The old script's header claimed `Internal Mic Capture Switch` comes up `off,off`
+and must be reset every boot. **That is false here.** The service log shows it
+succeeded, the driver does not clear it across any capture-prepare/stop cycle in
+dmesg, and it stays `on,on` under observation. It is still set, as cheap
+insurance, but it was not the fault.
+
+### Why the old script appeared to work and changed nothing
+
+These are not ordinary mixer controls:
+
+```
+Internal Mic Capture Switch    access=rw------    owner write only
+Internal Mic Capture Volume    access=rw---R--    READ ONLY
+Internal Mic Boost Volume      access=rw---R--    READ ONLY
+```
+
+Volume and Boost are marked read-only to *every* user; only the driver's HDA verb
+path sets them. An unprivileged `amixer` exits 0 and changes nothing. The script
+ran as root via systemd so its writes were real — but the values it wrote were
+wrong, and it discarded stderr, so a failure would have been invisible.
+
+`scripts/imac-mic-on` now verifies after writing and exits non-zero on a mismatch.
+
+### Still open
+
+With the duplex profile applied the node exists, but **app-level capture through
+PipeWire returns digital silence** — peak 0, 705600/705600 samples zero — while
+`arecord -D hw:0,0` directly is clean. The hardware path works; something between
+PipeWire and it still yields nothing. Leading suspect is the driver hook in dmesg:
+
+```
+cs_8409_capture_pcm_hook jack_present 0
+```
+
+The codec reports no jack, so the capture hook may be stopping the stream when
+opened through the normal path. **Not resolved.**
+
+### Persistence caveat
+
+The working profile was set with `pactl set-card-profile` and is **runtime only**.
+It will revert on reboot or session restart. The corrected `51-imac-surround.conf`
+written in 0.5+ block syntax did **not** take effect — after restarting
+WirePlumber the profile was still `output:analog-stereo`. Left in place but
+unproven; it is not yet a working fix.
+
+`scripts/imac-verify` checks the gain values.
 
 ## Turning the driver's logging on — the diagnostic that finally worked
 
