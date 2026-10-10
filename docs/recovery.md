@@ -296,7 +296,7 @@ in this repository.
 |---|---|---|
 | Patched `amdgpu` | **only** inside `initrd-stackC` | `/lib/modules` holds a **stock** copy with no `tiled_stitch` |
 | `tiled_stitch` value | kernel command line, `amdgpu.tiled_stitch=-1` | sysfs readback mirrors it; both should read `-1` |
-| CS8409 audio driver | DKMS, `snd-hda-macbookpro/0.1` → `updates/` | not in-tree |
+| CS8409 audio driver | DKMS, `snd-hda-macbookpro/0.2` → `updates/` | not in-tree |
 | Internal speakers | 2-channel `analog-stereo` | the 4-channel `analog-surround-40` enumeration is the broken one |
 | Plymouth | omitted from `initrd-stackC` | installed as packages, but stripped from that image |
 | iGPU | hidden by Apple firmware (see `docs/igpu-and-quicksync.md`) | enabling it can steal HDA audio **and** changes the DRM topology the 5K tiling depends on |

@@ -1,0 +1,24 @@
+#!/bin/sh
+# Put kernel images and initrds on the XBOOTLDR, not the ESP.
+#
+# The ESP (p1) is 197 MiB and a kernel+initrd pair is ~95 MiB, so exactly one
+# fits. Installing a new kernel therefore meant overwriting the one that is
+# currently bootable, and when the transaction failed part-way through
+# (2026-10-09, `zypper dup` to 7.2.8) it left the ESP unable to boot.
+#
+# The XBOOTLDR (p6) is 3.8 GiB and holds several pairs comfortably.
+#
+# kernel-install reads entry_dir from /etc/kernel/config in some versions and
+# only from the environment in others, and this build used the environment, so
+# the variables are exported here. This hook runs first (01-) so every later
+# hook - including 90-loaderentry, which does the copying - sees them.
+#
+# p6 was also mistyped as a Linux data partition (BC13C2FF), which meant
+# systemd-boot never searched it. It is now C12A7328 (XBOOTLDR).
+[ "$1" = add ] || [ "$1" = remove ] || exit 0
+KERNEL_INSTALL_BOOT_ROOT=/boot/efi
+KERNEL_INSTALL_ENTRY_DIR=/boot/efi-xbootldr
+KERNEL_INSTALL_CONF_ROOT=/etc/kernel
+KERNEL_INSTALL_LAYOUT=bls
+export KERNEL_INSTALL_BOOT_ROOT KERNEL_INSTALL_ENTRY_DIR KERNEL_INSTALL_CONF_ROOT KERNEL_INSTALL_LAYOUT
+exit 0

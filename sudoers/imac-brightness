@@ -8,4 +8,17 @@
 # This grants exactly one capability: writing an integer to
 # /sys/class/backlight/*/brightness. Nothing else. Revoke with:
 #   sudo rm /etc/sudoers.d/imac-brightness
-ilya ALL=(root) NOPASSWD: /usr/local/libexec/imac-brightness-set
+#
+# INSTALL - substitute your own username. The literal below is a placeholder;
+# sudoers does not expand %u, so a file naming "ilya" grants nothing to anyone
+# else and fails silently, which looks exactly like "brightness is broken".
+# Put this in /etc/sudoers.d/ with YOUR user:
+#
+#   sed "s/^YOUR_USER/$USER/" sudoers/imac-brightness \
+#     | sudo tee /etc/sudoers.d/imac-brightness >/dev/null
+#   sudo chmod 0440 /etc/sudoers.d/imac-brightness
+#
+# Validate before you log out, or a typo locks you out of sudo entirely:
+#   sudo visudo -cf /etc/sudoers.d/imac-brightness
+#
+YOUR_USER ALL=(root) NOPASSWD: /usr/local/libexec/imac-brightness-set

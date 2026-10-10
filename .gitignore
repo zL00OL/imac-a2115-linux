@@ -6,7 +6,7 @@ squashfs-root/
 
 # Resolve installer payload (large, licensed)
 *.run
-*.zip
+*.zip          # scratch archives, not vendored sources
 
 # ESP/BLS backups and generated initramfs
 5k-stackC-backup/

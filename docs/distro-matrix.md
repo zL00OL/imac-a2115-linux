@@ -25,7 +25,7 @@ The honest summary. A blank cell means nobody has checked, not that it works.
 Notes on the rows:
 
 - **7.2.7 audio is verified, display is not.** `dkms status` lists
-  `snd-hda-macbookpro/0.1` built for 7.2.7, so the codec half is done. The
+  `snd-hda-macbookpro/0.2` built for 7.2.7, so the codec half is done. The
   patched `amdgpu` has only ever been built for 7.2.2 — the 7.2.7 object tree
   contains no modules. So the question "is this tied to 7.2.2, or was 7.2.2 just
   the first one tried?" is **still open**.

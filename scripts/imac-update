@@ -126,18 +126,25 @@ if [ -f /etc/zypp/constraints.d/kernel-block.const ]; then
     warn "you will need a patched amdgpu in an initramfs for the new kernel (docs/kernel-updates.md)"
   fi
 else
-  say "  kernel constraint absent"
-  if [ "$WANT_KERNEL" -eq 1 ]; then
-    # Nothing left to lift, but the incoming kernel still has no patched amdgpu
-    # unless an initramfs carrying one already exists for it. Installing it and
-    # then booting it would drop the 5K panel with no way back from a bad
-    # default, so stop here instead.
-    warn "--kernel with NO constraint: nothing left to lift, and the new kernel"
-    warn "will not have a patched amdgpu - build one into an initramfs first"
-    warn "(docs/kernel-updates.md), or drop --kernel to keep the current kernel"
-    die "aborting --kernel: no patched initrd for the target kernel"
+    say "  kernel constraint absent"
+    if [ "$WANT_KERNEL" -eq 1 ]; then
+      # 45-amdgpu-5k.install used to make this a hard abort: with no constraint
+      # and no hand-built initrd there was nothing to boot safely, so stopping was
+      # correct. It is no longer fatal because the kernel-install hook now queues
+      # the build itself. The kernel is still NOT safe to boot the moment zypper
+      # returns - the build takes 20-45 minutes - so this is a wait, not a
+      # warning you can ignore.
+      warn "--kernel: no constraint, so the new kernel will arrive with a STOCK"
+      warn "amdgpu, which has no tiled_stitch parameter and gives you ONE tile."
+      warn "45-amdgpu-5k.install queues the patched build on kernel install."
+      warn ""
+      warn "After this finishes, WAIT for the build before rebooting:"
+      warn "  journalctl -fu imac-amdgpu-build@<new-kver>      # watch it"
+      warn "  imac-amdgpu-install --check --kver <new-kver>    # must not say stock"
+      warn ""
+      warn "Rebooting before that finishes costs you the second tile."
+    fi
   fi
-fi
 
 if [ "$DRY" -eq 1 ]; then
   say ""

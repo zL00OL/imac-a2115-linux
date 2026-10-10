@@ -1,0 +1,20 @@
+[Unit]
+Description=Build the patched amdgpu for kernel %i
+# Detached on purpose. The build is 20-45 minutes and the alternative is holding
+# a zypper transaction open for that long, which risks the mid-commit failure
+# that left the ESP unbootable on 2026-10-09.
+After=network.target
+Documentation=file:///usr/local/share/doc/imac-linux/kernel-updates.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/imac-amdgpu-install --kver %i
+TimeoutStartSec=7200
+Nice=10
+# The build is memory-hungry across nproc jobs; do not let it starve the desktop
+# if someone is still using the machine while it runs.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

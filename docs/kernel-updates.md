@@ -44,8 +44,8 @@ dkms status                    # verify one line per kernel
 Expected:
 
 ```
-snd-hda-macbookpro/0.1, 7.2.2-1-default, x86_64: installed (Original modules exist)
-snd-hda-macbookpro/0.1, 7.2.7-1-default, x86_64: installed (Original modules exist)
+snd-hda-macbookpro/0.2, 7.2.2-1-default, x86_64: installed (Original modules exist)
+snd-hda-macbookpro/0.2, 7.2.7-1-default, x86_64: installed (Original modules exist)
 ```
 
 Note `(Original modules exist)`. That is correct and expected — the in-tree

@@ -2,6 +2,32 @@
 
 **Goal: one seamless 5120x2880 desktop across both panels, no seam**
 
+> [!CAUTION]
+> **The vendored 5K patches have no confirmed licence.** They are derived from
+> GPL-2.0 kernel code but carry no licence header, and one upstream fork publishes
+> no licence at all. Treat `patches/amdgpu-5k/` as **GPL-2.0-only by assumption**,
+> *not* as MIT like the rest of this repo. Publishing them for reference is fine;
+> redistributing them inside a product needs the terms confirmed with the
+> upstream authors first. Full detail in
+> [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md#licensing-of-the-vendored-patches--unresolved).
+
+## Before you start: this is one machine, one distro
+
+Everything here was verified on **one iMac19,1 running openSUSE Tumbleweed-Slowroll
+on kernel 7.2.x**. Two consequences dominate everything else on this page:
+
+- **The 5K patches are pinned to the 7.1.x–7.2.x amdgpu series.** They refuse to
+  apply outside that range on purpose. A 7.3+ kernel needs the patches re-ported
+  by a human, not re-run. Until that happens, a kernel bump gives you a stock
+  `amdgpu` — which has **no `tiled_stitch` parameter at all** — and you boot to
+  **one tile instead of two, with nothing logged as an error.** This is the single
+  most likely way to lose your display, and it looks like a hardware fault.
+- **Nothing here is upstream.** No part of this is in the kernel, DKMS, or
+  systemd-boot. It is all local patches and scripts on one disk.
+
+If you are not on openSUSE, start with [docs/distro-matrix.md](docs/distro-matrix.md)
+and expect to do the porting yourself.
+
 ## Reference system
 
 Every claim in this repository was verified on exactly this configuration.
@@ -76,6 +102,44 @@ they will not apply and must be re-ported by a human. See
 > ```
 
 ---
+
+## Quickstart for a clean A2115
+
+Ordered. Do not skip step 3 — it is the one that cannot be recovered from
+remotely, and it is also the step that silently costs you the second tile if you
+get it wrong.
+
+```bash
+git clone https://github.com/zL00OL/imac-linux.git
+cd imac-linux
+
+# 1. Read this first. It explains the failure you are most likely to have.
+less docs/boot-layout.md
+
+# 2. Install the tooling (hooks, helpers, patches, docs).
+sudo ./install.sh
+#    It deliberately does NOT touch sudoers. Do that by hand, with a visudo check:
+sed "s/^YOUR_USER/$USER" sudoers/imac-brightness | \
+  sudo tee /etc/sudoers.d/imac-brightness >/dev/null
+sudo chmod 0440 /etc/sudoers.d/imac-brightness
+sudo visudo -cf /etc/sudoers.d/imac-brightness      # must pass
+
+# 3. THE DESTRUCTIVE STEP. Back up the ESP partition before touching kernels.
+#    Do not skip this: a cold-boot failure on this panel needs physical access.
+sudo ./scripts/imac-verify            # read-only; paste its output in an issue
+
+# 4. Kernel updates. The 45-amdgpu-5k hook builds the patched module for you,
+#    but it takes 20-45 min and runs DETACHED - the new kernel is NOT safe to
+#    boot until it finishes.
+sudo imac-update --dry-run
+sudo imac-update --kernel
+#    ...then wait, before rebooting:
+journalctl -fu imac-amdgpu-build@<new-kver>
+imac-amdgpu-install --check --kver <new-kver>       # must not say "stock"
+```
+
+**The one rule:** never boot a kernel whose `imac-amdgpu-install --check` says
+`stock`. You will get a single tile, and it will not tell you why.
 
 ## Start here
 
@@ -167,9 +231,11 @@ before changing anything.
 | `scripts/imac-setos-patch` | exposes the iGPU by editing the kernel's EFI stub — finds the model table by content, refuses to guess |
 | `scripts/imac-setos-install` | regenerates the patched kernel and the single boot entry after every kernel install |
 | `scripts/esp-prune-kernels` | keeps the ESP within capacity; called by the `97-` hook, which runs last |
-| `scripts/imac-audio-fix` | **RETIRED** — would remove the driver that makes headset capture work; kept as a stub the record, `--check` only |
+| `scripts/imac-audio-fix` | **RETIRED** — would remove the driver that makes headset capture work; kept as a stub for the record, `--check` only |
 | `scripts/imac-audio-module` | **RETIRED** — built the codec into `updates/ext01`, a path measured to lose the codec bind to DKMS. Kept for the record; the codec is installed with DKMS. See [docs/audio.md](docs/audio.md) |
 | `scripts/imac-update` | update the distro, rebuild the codec, then re-apply |
+| `scripts/imac-amdgpu-install` | **builds the patched amdgpu** for a kernel — the step a kernel update silently skips; `--check` reports whether the running module is ours |
+| `install.sh` | **the only installer.** user-facing commands to `/usr/local/bin`, root/systemd helpers to `/usr/local/libexec`, hooks to `/etc/kernel/install.d`. `--dry-run` and `--uninstall` |
 
 ## Credits
 
@@ -204,7 +270,7 @@ on the 2-channel `analog-stereo` enumeration, with no configuration change
 required. The old "rear pair works, front pair silent" symptom was not a broken
 amplifier path — it was the codec enumerating as a 4-channel sink
 (`analog-surround-40`), where only the woofer path misbehaves. The codec itself
-is a DKMS module (`snd-hda-macbookpro/0.1`), verified by srcversion against the
+is a DKMS module (`snd-hda-macbookpro/0.2`), verified by srcversion against the
 loaded module. See `docs/audio.md`.
 
 This repository covers the **display** and the **audio codec**, and nothing
@@ -220,8 +286,15 @@ the git history if you want them back.
   link-training loops. **Still unfixed.** A patch that appears to address it
   exists — see `docs/kernel-updates.md` — but it is not yet built or verified
   here.
-- **No microphone.** The CS8409 exposes no capture device at all. The driver's
-  own notes describe input as unfinished. Driver work, not configuration.
+- **Microphone: capture exists, but PipeWire delivers silence.** Corrected
+  2026-10-10. This used to say "the CS8409 exposes no capture device at all",
+  which was wrong and cost real time. ALSA capture on the internal codec works
+  fine (`arecord -D hw:0,0` gives clean signal), so neither the hardware nor the
+  patched codec is the problem. Two separate faults turned out to be in the way:
+  a WirePlumber profile left the card playback-only so no mic node existed, and
+  the gain was set ~43 dB too low. The node now exists, but app-level capture
+  through PipeWire still returns digital silence. Open. See
+  [docs/audio.md](docs/audio.md#internal-microphone--two-faults-2026-10-10).
 - **A speaker EQ is not achievable.** PipeWire's `filter-chain` module fails to
   initialise on this machine, and with `nofail` it fails silently — audio
   bypasses the EQ while every tool reports success. This is also why the

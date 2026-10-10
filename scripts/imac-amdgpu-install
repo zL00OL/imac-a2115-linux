@@ -1,0 +1,248 @@
+#!/bin/bash
+# Build and install the patched amdgpu for a given kernel release.
+#
+#   sudo imac-amdgpu-install                # build for `uname -r`
+#   sudo imac-amdgpu-install --kver 7.2.8-1-default
+#   sudo imac-amdgpu-install --check        # is the running module ours?
+#   sudo imac-amdgpu-install --dry-run      # print the plan, build nothing
+#
+# WHY THIS EXISTS
+#
+# The 5K panel needs a patched amdgpu. Six patches from patches/amdgpu-5k add
+# tiled_stitch, the second-tile wake path, per-frame CRTC reset for genlock, and
+# three AMD-specific fixes. A stock amdgpu has NO tiled_stitch parameter at all,
+# so a kernel that installs without this build boots to a working-looking desktop
+# with ONE tile instead of two, and logs nothing.
+#
+# That is the failure mode this script exists to prevent, and it is why
+# imac-update --kernel used to abort rather than guess.
+#
+# The build is the full `make modules`, not a targeted one. This is not a
+# stylistic choice:
+#
+#   make .../amdgpu/                  compiles objects, links .o, produces NO module
+#   make .../amdgpu/amdgpu.ko         modpost in single-module mode, 1143 undefined symbols
+#   KBUILD_MODPOST_WARN=1             silences those but emits a module carrying no
+#                                     symbol CRCs, because CONFIG_MODVERSIONS=y
+#                                     means the kernel refuses to load it
+#
+# Only `make modules` against the shipped objtree works, and it takes 20-45
+# minutes on six cores. Plan for it. The build is therefore run detached when
+# invoked from a kernel-install hook, so the package transaction is not held open
+# for half an hour.
+#
+# IDEMPOTENCE
+#
+# Safe to run repeatedly. An already-patched source tree is detected and skipped,
+# and a module that already reports the patched srcversion is not rebuilt. A
+# half-finished previous run (patched source, no module) is detected and resumed
+# from the build step rather than repatching.
+set -u
+# NOTE: deliberately not `set -e`. This script changes system state and every
+# step is checked explicitly so a failure is reported and logged rather than
+# aborting mid-sequence and leaving the machine half-updated. Adding -e here would
+# trade a diagnosable failure for an opaque one.
+export PATH=/usr/sbin:/usr/bin:/sbin
+
+# The repo is not on every machine that runs this script (the iMac itself may not
+# have a checkout), so accept a patch directory override, and fall back to any
+# local checkout rather than hard-failing on a missing repo.
+REPO=${IMAC_REPO:-$HOME/imac-a2115-repo}
+PATCHDIR=${IMAC_PATCHDIR:-}
+if [ -z "$PATCHDIR" ]; then
+  for cand in "$REPO/patches/amdgpu-5k" \
+              /var/lib/imac/patches/amdgpu-5k \
+              /usr/local/share/imac/patches/amdgpu-5k; do
+    [ -d "$cand" ] && { PATCHDIR="$cand"; break; }
+  done
+fi
+LOG=${IMAC_AMDGPU_LOG:-/var/log/imac-amdgpu.log}
+
+KVER=""; MODE=build
+case "${1:-}" in
+  --check)  MODE=check ;;
+  --dry-run) MODE=dry ;;
+  --kver)    KVER="${2:-}"; shift ;;
+  --kver=*)  KVER="${1#--kver=}" ;;
+esac
+[ -n "$KVER" ] || KVER=$(uname -r)
+
+say(){ printf '%s\n' "$*" | tee -a "$LOG"; }
+step(){ say ""; say "=== $* ==="; }
+ok(){ say "  [ ok ] $*"; }
+warn(){ say "  [warn] $*"; }
+bad(){ say "  [FAIL] $*"; }
+
+step "imac-amdgpu-install for $KVER"
+
+SRC="/usr/src/linux-$KVER"
+OBJ="/usr/src/linux-${KVER}-obj/x86_64/default"
+DEST="/usr/lib/modules/$KVER/updates"
+
+# /usr/src trees are named for the PACKAGE release, not `uname -r`. The running
+# kernel is 7.2.8-1-default but the tree is /usr/src/linux-7.2.8-1, installed by
+# kernel-devel-7.2.8-1.1. Assuming they match gives a clean "no source tree" for
+# the kernel you are literally running, which is not a useful error.
+# Strip only the flavour suffix, and only if that names a tree that exists.
+if [ ! -d "$SRC" ]; then
+  FLAV="${KVER%-default}"
+  if [ -d "/usr/src/linux-$FLAV" ]; then
+    SRC="/usr/src/linux-$FLAV"
+    OBJ="/usr/src/linux-${FLAV}-obj/x86_64/default"
+    say "  note: $KVER has no tree of its own; using /usr/src/linux-$FLAV"
+  fi
+fi
+
+# srcversion of the module this script produces. Recorded from the running
+# 7.2.8 build. A different kernel will produce a different one, so this is used
+# only to recognise the OUTPUT of a previous successful run of this script, never
+# to decide whether a build is required.
+KNOWN_PATCHED_SRCVERSION=31F26E96354E3264CF28120
+STOCK_SRCVERSION=4BFAA1013BED7E3FB557CF0
+
+mod_srcversion(){
+  # Read the module's srcversion out of the running kernel, or out of the file on
+  # disk for a kernel that is not running.
+  if [ "$KVER" = "$(uname -r)" ] && [ -r /sys/module/amdgpu/srcversion ]; then
+    cat /sys/module/amdgpu/srcversion
+    return
+  fi
+  local ko="$DEST/amdgpu.ko.zst" tmp
+  [ -f "$ko" ] || return 1
+  tmp=$(mktemp -d)
+  zstd -d -q -f -o "$tmp/amdgpu.ko" "$ko" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+  modinfo -F srcversion "$tmp/amdgpu.ko" 2>/dev/null
+  rm -rf "$tmp"
+}
+
+if [ "$MODE" = check ]; then
+  SV=$(mod_srcversion) || { say "  no amdgpu in updates/ for $KVER"; exit 1; }
+  say "  srcversion: $SV"
+  case "$SV" in
+    "$STOCK_SRCVERSION") bad "this is the STOCK module - no tiled_stitch, no second tile"; exit 1 ;;
+    *) ok "not the stock module" ;;
+  esac
+  exit 0
+fi
+
+#--- preconditions
+[ -d "$SRC" ] || { bad "no source tree at $SRC"; say "  install kernel-defaults-<ver>-source, or see docs/kernel-updates.md"; exit 1; }
+[ -d "$OBJ" ] || { bad "no objtree at $OBJ"; say "  the shipped objtree is required so vermagic matches the packaged kernel"; exit 1; }
+[ -d "$PATCHDIR" ] || { bad "no patch directory found"; say "  looked in \$IMAC_PATCHDIR, \$IMAC_REPO/patches/amdgpu-5k,"; say "  /var/lib/imac/patches/amdgpu-5k, /usr/local/share/imac/patches/amdgpu-5k"; exit 1; }
+say "  patches: $PATCHDIR"
+
+# Verify the patches are the ones this machine was verified with. A silently
+# changed patch set is exactly the kind of thing that produces a module that
+# compiles, loads, and does nothing useful.
+if ! (cd "$PATCHDIR" && sha256sum -c >/dev/null 2>&1 <<'EOF'
+ad9f9674adf815ea2733fdbddb955a914482291c1d4c70f2d8e416db5117f40e  imac5k-lean-core-7.2.x.patch
+7f6ca13ca4354305ac1dfe0d9a9e7783daed8375c1117836c13b384fc9f1bc0c  imac5k-stitch-layer-7.x.patch
+ce1600998f5bf8cf6c7746617528a9491d6a385022a094cc3c99d14b168281c2  imac5k-stitch-hide-slave.patch
+4286fed046fd53077df1fb738629d9e443fa159fbca205dc09d54f5d4df78f9f  amdgpu-hpd-skip-during-reset.patch
+4e165abacc093b72cefb7c03672fa10d67c64369edcc9f0a06d9d63708bed6fe  amdgpu-vce-suspend-in-reset.patch
+66f08851a069027072127902dcec77dcf8369e1bc34d6d5dcdec481044512ddc  amdgpu-vce3-ring-align-mask.patch
+EOF
+); then
+  bad "patch checksums do not match the verified set in $PATCHDIR"
+  say "  Refusing to build. A changed patch set needs a human to re-verify against"
+  say "  docs/tiled-5k.md before it is trusted on this machine."
+  exit 1
+fi
+ok "six patches match the verified checksums"
+
+PATCHES="imac5k-lean-core-7.2.x.patch imac5k-stitch-layer-7.x.patch
+         imac5k-stitch-hide-slave.patch amdgpu-hpd-skip-during-reset.patch
+         amdgpu-vce-suspend-in-reset.patch amdgpu-vce3-ring-align-mask.patch"
+
+# Already done? A patched tree still contains tiled_stitch; a stock one does not.
+if grep -rqs 'tiled_stitch' "$SRC/drivers/gpu/drm/amd/" 2>/dev/null; then
+  ok "source tree is already patched, skipping patch step"
+else
+  if [ "$MODE" = dry ]; then
+    say "  [dry-run] would apply six patches to $SRC"
+  else
+    step "patch"
+    for p in $PATCHES; do
+      if ! patch -p1 --fuzz=0 -d "$SRC" < "$PATCHDIR/$p" >>"$LOG" 2>&1; then
+        bad "patch failed: $p"
+        say "  All six are required. Dry-running one against a pristine tree makes"
+        say "  imac5k-stitch-layer look like it conflicts; that is expected and is"
+        say "  not a reason to skip it. See patches/amdgpu-5k/README.md."
+        say "  Full log: $LOG"
+        exit 1
+      fi
+      ok "$p"
+    done
+  fi
+fi
+
+#--- build
+if [ "$MODE" = dry ]; then
+  say "  [dry-run] would: make -j$(nproc) modules (20-45 min)"
+  say "  [dry-run] then install to $DEST, depmod, and rebuild the initramfs"
+  say "  [dry-run] nothing was changed."
+  exit 0
+fi
+
+step "build (20-45 minutes, this is expected)"
+if ! make -C "$SRC" -j"$(nproc)" O="$OBJ" modules >>"$LOG" 2>&1; then
+  bad "make modules failed"
+  say "  Full log: $LOG"
+  exit 1
+fi
+ok "make modules completed"
+
+KO="$OBJ/drivers/gpu/drm/amd/amdgpu/amdgpu.ko"
+[ -f "$KO" ] || { bad "no amdgpu.ko at $KO"; exit 1; }
+
+#--- verify before installing. A module that does not carry the parameter is
+# useless here no matter how cleanly it built.
+step "verify"
+VM=$(modinfo -F vermagic "$KO" 2>/dev/null)
+say "  vermagic: $VM"
+case "$VM" in
+  "$KVER"*) ok "vermagic matches $KVER" ;;
+  *) bad "vermagic does not match $KVER - this module will not load"; exit 1 ;;
+esac
+
+NSTITCH=$(modinfo "$KO" 2>/dev/null | grep -c '^parm.*tiled_stitch')
+[ "$NSTITCH" -ge 1 ] || { bad "built module has no tiled_stitch parameter - the patches did not take"; exit 1; }
+ok "tiled_stitch present ($NSTITCH parm line)"
+
+#--- install
+step "install"
+mkdir -p "$DEST"
+strip --strip-debug "$KO" 2>/dev/null
+zstd -q -f -19 "$KO" -o "$DEST/amdgpu.ko.zst" || { bad "compress failed"; exit 1; }
+ok "installed $DEST/amdgpu.ko.zst ($(du -h "$DEST/amdgpu.ko.zst" | cut -f1))"
+
+depmod -a "$KVER" || { bad "depmod failed"; exit 1; }
+ok "depmod"
+
+#--- initramfs. Without this the module is on disk but not in the early boot
+# image, and the panel comes up with whatever in-tree amdgpu the initrd had.
+INITRD="/boot/efi-xbootldr/opensuse-slowroll/$KVER/initrd"
+[ -f "$INITRD" ] || INITRD="/boot/efi/opensuse-slowroll/$KVER/initrd"
+if [ -f "$INITRD" ]; then
+  step "initramfs"
+  if dracut -f "$INITRD" "$KVER" >>"$LOG" 2>&1; then
+    N=$(lsinitrd "$INITRD" 2>/dev/null | grep -cE 'updates/amdgpu|updates/snd-hda-codec-cs8409')
+    if [ "$N" -ge 2 ]; then
+      ok "initramfs rebuilt, carries both patched modules"
+    else
+      bad "initramfs rebuilt but carries only $N of the 2 required modules"
+      say "  check: lsinitrd $INITRD | grep -E 'updates/(amdgpu|snd-hda-codec-cs8409)'"
+      exit 1
+    fi
+  else
+    bad "dracut failed; full log: $LOG"
+    exit 1
+  fi
+else
+  warn "no initrd found for $KVER; rebuild it before booting this kernel"
+fi
+
+step "done"
+say "  built and installed a patched amdgpu for $KVER"
+say "  confirm with: cat /sys/module/amdgpu/srcversion  (after reboot)"
+say "  stock is $STOCK_SRCVERSION; anything else is ours."

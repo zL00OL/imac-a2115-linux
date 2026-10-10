@@ -14,6 +14,10 @@
 # NOT `uname -r`: the hook runs at install time while the old kernel is still
 # running, so uname would name the old one and the new kernel would stay stock.
 set -u
+# NOTE: deliberately not `set -e`. This script changes system state and every
+# step is checked explicitly so a failure is reported and logged rather than
+# aborting mid-sequence and leaving the machine half-updated. Adding -e here would
+# trade a diagnosable failure for an opaque one.
 ESP=/boot/efi
 PATCHER=/usr/local/libexec/imac-setos-patch
 

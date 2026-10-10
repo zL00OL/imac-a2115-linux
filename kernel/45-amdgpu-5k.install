@@ -1,0 +1,61 @@
+#!/bin/sh
+# Build the patched amdgpu whenever a kernel is installed.
+#
+# Without this, a kernel update silently costs the machine half its screen: the
+# shipped amdgpu has no tiled_stitch parameter, so the second tile never comes
+# up, and nothing in the boot log says so. It looks like a hardware fault.
+#
+# ORDERING
+#
+#   01-xbootldr-layout   redirects the payload to the XBOOTLDR
+#   40-dkms              builds the audio codec DKMS module
+#   50-depmod
+#   50-dracut            BUILDS THE INITRAMFS  <- must run after us
+#   90-loaderentry       writes the stock boot entry
+#   95-esp-prune
+#   96-imac-setos        patches the kernel for iGPU and writes our entry
+#
+# This hook is numbered 45-, so the module it installs is in place before dracut
+# builds the initramfs. If it ran after 50-, the initramfs would be built without
+# the patched amdgpu and the module would be on disk but not in early userspace,
+# which is the same broken result by a different route.
+#
+# IT DOES NOT BLOCK THE TRANSACTION
+#
+# The build is 20-45 minutes and is not incremental. Holding a zypper transaction
+# open for that long risks a timeout that leaves the package database mid-commit,
+# which is precisely how the ESP was left unbootable on 2026-10-09. So the work
+# is handed to a detached unit and this hook returns immediately.
+#
+# The consequence, stated plainly: after `zypper up` the new kernel may not have
+# its patched amdgpu for up to 45 minutes. Until the build finishes, that kernel
+# is NOT safe to boot for 5K. The unit logs to /var/log/imac-amdgpu.log, and
+# imac-amdgpu-install --check <kver> reports readiness.
+#
+# Deliberately NOT running before 96-imac-setos: our entry names the kernel, not
+# the module, so the two are independent and 96 should not wait on a 45 minute
+# build. If the module is not ready the entry still points at a kernel whose
+# amdgpu is stock; imac-verify catches that, and the old kernel is still the one
+# marked default until the build is confirmed.
+[ "$1" = add ] || exit 0
+
+KVER="$2"
+[ -n "$KVER" ] || exit 0
+[ -x /usr/local/libexec/imac-amdgpu-install ] || exit 0
+
+UNIT="imac-amdgpu-build@${KVER}.service"
+if systemctl is-active --quiet "$UNIT"; then
+  echo "  imac-amdgpu: build for $KVER already running"
+  exit 0
+fi
+if systemctl start "$UNIT" 2>/dev/null; then
+  echo "  imac-amdgpu: queued patched-amdgpu build for $KVER (20-45 min, detached)"
+  echo "  imac-amdgpu: watch with: journalctl -fu $UNIT"
+  echo "  imac-amdgpu: do NOT boot $KVER until it finishes, or you get one tile."
+  echo "  imac-amdgpu: check with: imac-amdgpu-install --check --kver $KVER"
+else
+  echo "  imac-amdgpu: WARNING could not start $UNIT"
+  echo "  imac-amdgpu: $KVER will boot with a STOCK amdgpu - single tile, no tiled_stitch."
+  echo "  imac-amdgpu: build it manually: sudo imac-amdgpu-install --kver $KVER"
+fi
+exit 0
