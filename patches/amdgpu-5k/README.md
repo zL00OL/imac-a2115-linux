@@ -99,26 +99,31 @@ refuses to apply elsewhere on purpose: on a series where the amdgpu source has
 drifted far enough it will not apply, and forcing it produces a broken module.
 A future 7.3+ needs the patch re-ported by a human, not re-run.
 
-### Two of the six are obsolete on 7.2.7
+### All six are required
 
-The reference machine now runs `7.2.7-1-default`, where upstream `amdgpu`
-carries `tiled_stitch` and the VCE-reset fix. Check before applying:
+The reference machine runs `7.2.8-1-default` with all six applied. An earlier
+note here said two were obsolete because `tiled_stitch` had gone upstream; that
+was wrong. The SUSE **source** tree carries `tiled_stitch` but the **shipped
+binary module** does not, so the stitch layer is still load-bearing on both
+7.2.7 and 7.2.8.
 
-| Patch | On 7.2.7 |
+| Patch | On 7.2.8 |
 |---|---|
-| `imac5k-stitch-layer-7.x.patch` | **obsolete** — `tiled_stitch` upstream at `amdgpu_drv.c:1054` |
-| `amdgpu-vce-suspend-in-reset.patch` | **obsolete** — upstream at `amdgpu_vce.c:327` |
-| `amdgpu-vce3-ring-align-mask.patch` | still needed — `vce_v3_0.c:939` is still `0xf` |
-| `imac5k-lean-core-7.2.x.patch` | still needed — second-tile wake and genlock are not upstream |
-| `imac5k-stitch-hide-slave.patch` | still needed — helper is not upstream |
-| `amdgpu-hpd-skip-during-reset.patch` | still needed — no `amdgpu_in_reset` guard upstream |
+| `imac5k-stitch-layer-7.x.patch` | needed — adds `tiled_stitch`, absent from the shipped module |
+| `imac5k-lean-core-7.2.x.patch` | needed — second-tile wake and genlock are not upstream |
+| `imac5k-stitch-hide-slave.patch` | needed — helper is not upstream |
+| `amdgpu-hpd-skip-during-reset.patch` | needed — no `amdgpu_in_reset` guard upstream |
+| `amdgpu-vce-suspend-in-reset.patch` | needed — no `amdgpu_in_reset` guard in `amdgpu_vce.c` |
+| `amdgpu-vce3-ring-align-mask.patch` | needed — `vce_v3_0.c:939` is still `0xf` |
+
+Deciding whether the module is patched or stock:
 
 ```bash
-grep -c tiled_stitch /usr/src/linux-$(uname -r | cut -d- -f1)-1/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+cat /sys/module/amdgpu/srcversion    # 31F26E96354E3264CF28120 = ours (7.2.8)
+                                     # 4BFAA1013BED7E3FB557CF0 = stock
 ```
 
-A reduced four-patch stack has not been booted; the machine still runs all six.
-See `docs/tiled-5k.md`.
+No subset has been tested. See `docs/tiled-5k.md`.
 
 ## Building
 

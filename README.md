@@ -16,16 +16,18 @@ UNTESTED in the page that discusses it.
 | **iGPU** | Intel UHD 630 `8086:3e92` at `00:02.0`, `i915` bound — **VERIFIED** |
 | **RAM / storage** | 32 GB (2 × 16 GiB, 2667 MT/s); Samsung SSD 990 PRO 2 TB + HP P900 1 TB USB — **VERIFIED** |
 | **Distro** | openSUSE Tumbleweed-Slowroll — **VERIFIED** |
-| **Kernel** | 7.2.7-1-default — **VERIFIED** |
+| **Kernel** | 7.2.8-1-default, all six 5K patches applied — **VERIFIED** |
 | **Desktop** | KDE Plasma 6 on Wayland — **VERIFIED** |
 | **Display** | 5120×2880 seamless, `amdgpu.tiled_stitch=-1` — **VERIFIED** |
 | **Audio codec** | DKMS `snd-hda-macbookpro/0.2` — **VERIFIED** |
 | **Internal speakers** | 2-channel `analog-stereo` — **VERIFIED** |
-| **Hardware encode** | iGPU H.264/HEVC/VP8 via VA-API on `renderD129` — **VERIFIED** |
+| **Hardware encode** | iGPU H.264/HEVC/VP8 via VA-API on `/dev/dri/by-path/pci-0000:00:02.0-render` — **VERIFIED** |
 
-The machine previously ran `7.2.2-1-default`. Moving to 7.2.7 was significant:
-`amdgpu.tiled_stitch` is upstream there, so two of the six vendored 5K patches
-are now obsolete. `docs/tiled-5k.md` has the per-patch status.
+The machine has run `7.2.2`, then `7.2.7`, and now runs **`7.2.8-1-default`**
+with all six vendored 5K patches applied. Note that the DRM card and render
+indices are **not stable across kernels** — use `/dev/dri/by-path/...`, not
+`renderD12N`. `docs/tiled-5k.md` has the per-patch status and the checks for
+telling the patched driver from the stock one.
 
 **Full machine details** — firmware, board id, KDE version, initramfs generator,
 kernel command line, per-patch status, `dkms` version — are in
@@ -134,7 +136,8 @@ before changing anything.
 | `docs/reference-system.md` | the machine every claim was verified on — full hardware, kernel, patch and DKMS identity |
 | `docs/recovery.md` | **read this before changing anything** — how to get back from a black screen, a lost initramfs, or an unbound device |
 | `docs/tiled-5k.md` | **the seam**: diagnosis and fixes — read this |
-| `docs/kernel-updates.md` | **read before `zypper up`** — the two modules a kernel bump silently drops |
+| `docs/boot-layout.md` | **read before `zypper up`** — why the ESP is too small for a kernel update, and the update order that works |
+| `docs/kernel-updates.md` | the two modules a kernel bump silently drops |
 | `patches/amdgpu-5k/` | the six vendored 5K patches, pinned + SHA-256 + apply order (**not MIT** — see `THIRD_PARTY_NOTICES.md`) |
 | `LICENSE` | MIT — covers **this repository's own scripts and documentation only** |
 | `THIRD_PARTY_NOTICES.md` | upstream credits, and the terms the vendored patches keep |

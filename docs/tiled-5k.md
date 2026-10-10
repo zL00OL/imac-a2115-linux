@@ -30,45 +30,63 @@ module_param_named(tiled_stitch, amdgpu_tiled_stitch, int, 0444);
 bool amdgpu_dm_has_tiled_stitch_panel(struct amdgpu_device *adev);
 ```
 
-### What the shipped module actually has
+### What the source has vs what the module has
 
-```bash
-$ modinfo -p amdgpu | grep tiled_stitch
-tiled_stitch: Stitch supported Apple iMac 5K dual-tile panels into one logical
-display (-1 = auto/default, 0 = disable, 1 = enable supported iMac panels only) (int)
+This is the distinction that was got wrong. Both are true, and only the second
+one matters:
+
+```
+$ grep -c tiled_stitch /usr/src/linux-7.2.8-1/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+5                                  <- the SOURCE has it
+
+$ modinfo -p amdgpu | grep -c tiled_stitch
+1                                  <- ...but only because updates/ has OUR patched build
 ```
 
-The parameter is present in `/usr/lib/modules/7.2.7-1-default/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst`
-(6,830,549 bytes). **No rebuild is required for the stitching on 7.2.7.**
-
-### Check before applying any of the 7.2.2-era patches
+Against the **shipped** module the answer is 0:
 
 ```bash
-grep -c tiled_stitch /usr/src/linux-$(uname -r | cut -d- -f1)-1/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
-# 0  -> this kernel needs the out-of-tree stitch patch
-# >0 -> this kernel has it upstream; do not apply that patch
+$ zstd -dc /usr/lib/modules/7.2.8-1-default/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst > /tmp/s.ko
+$ modinfo -p /tmp/s.ko | grep -c tiled_stitch
+0
+$ modinfo -F srcversion /tmp/s.ko
+4BFAA1013BED7E3FB557CF0
 ```
 
-### Not all six patches are obsolete
+Note `modinfo -p <file>.ko.zst` prints **nothing**, because modinfo does not
+decompress zstd. An empty result is not evidence of absence; it is evidence of
+a tool that cannot read the file. Decompress first, as above.
 
-`tiled_stitch` upstream does **not** mean the vendored stack can be dropped. Two
-of the six are now redundant and four are still doing work:
+### The check that actually decides it
 
-| Patch | On 7.2.7 |
+```bash
+# loaded driver
+cat /sys/module/amdgpu/srcversion                       # 31F26E96... = ours
+                                                          # 4BFAA101... = stock
+# and where it came from
+modinfo -n amdgpu          # .../updates/amdgpu.ko.zst  = ours
+                           # .../kernel/...            = stock
+```
+
+### All six patches are required
+
+There is no subset. Each patch covers something the shipped module and the
+upstream source both lack:
+
+| Patch | On 7.2.8 |
 |---|---|
-| `imac5k-stitch-layer-7.x.patch` | **obsolete** — `tiled_stitch` is upstream |
-| `amdgpu-vce-suspend-in-reset.patch` | **obsolete** — upstream at `amdgpu_vce.c:327` |
-| `amdgpu-vce3-ring-align-mask.patch` | **still needed** — `vce_v3_0.c:939` still has `align_mask = 0xf` |
-| `imac5k-lean-core-7.2.x.patch` | **still needed** — second-tile wake (`0x4f1`) and genlock are not upstream |
-| `imac5k-stitch-hide-slave.patch` | **still needed** — `amdgpu_dm_link_is_tiled_stitch_slave()` is not upstream |
-| `amdgpu-hpd-skip-during-reset.patch` | **still needed** — no `amdgpu_in_reset` guard upstream |
+| `imac5k-stitch-layer-7.x.patch` | **needed** — adds the `tiled_stitch` module parameter |
+| `amdgpu-vce3-ring-align-mask.patch` | **needed** — `vce_v3_0.c:939` still has `align_mask = 0xf` |
+| `imac5k-lean-core-7.2.x.patch` | **needed** — second-tile wake (`0x4f1`) and genlock are not upstream |
+| `imac5k-stitch-hide-slave.patch` | **needed** — `amdgpu_dm_link_is_tiled_stitch_slave()` is not upstream |
+| `amdgpu-hpd-skip-during-reset.patch` | **needed** — no `amdgpu_in_reset` guard upstream |
+| `amdgpu-vce-suspend-in-reset.patch` | **needed** — no `amdgpu_in_reset` guard in `amdgpu_vce.c` |
 
-The second-tile wake is the part upstream `tiled_stitch` does not cover: the
-right-hand tile still needs the `0x4F1` root-latch pulse to come up.
+All six applied to `/usr/src/linux-7.2.8-1` at `--fuzz=0`, and the module built
+from that tree is the one the machine booted.
 
-**A reduced four-patch stack has not been booted.** The table above is a source
-inspection; the machine is still running all six. See
-`docs/reference-system.md`.
+**A reduced subset has never been booted.** Treat all six as required until one
+is proven droppable on a real boot, not by source inspection.
 
 ### It works differently, and that is the better behaviour
 
@@ -116,8 +134,8 @@ $ cat /sys/module/amdgpu/parameters/tiled_stitch
 ```
 
 The earlier contradiction came from the out-of-tree patch, which used a
-different type. That patch is obsolete on 7.2.7, so the disagreement no longer
-applies; on a patched 7.2.2 kernel the sysfs value was never authoritative.
+different type. On any patched kernel the sysfs value is therefore not
+authoritative, because the patch changes the type the kernel prints.
 
 ### `amdgpu` takes about 8 seconds to initialise
 

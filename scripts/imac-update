@@ -54,19 +54,18 @@ die()  { say "ABORT: $*"; say "see $LOG"; exit 1; }
 # pending reboot. Read the BLS "version" field instead (1@7.2.2-1-default),
 # falling back to the directory of the "linux" path, then to /lib/modules.
 # Entries whose kernel directory no longer exists are stale and are dropped.
-# This machine has two EFI partitions. The BLS entries live on XBOOTLDR; the
-# ESP's own entries directory is empty. Firmware reads the ESP's loader.conf but
-# the boot entries themselves come from XBOOTLDR, so hardcoding either path gets
-# it wrong in one direction or the other. See docs/recovery.md.
-# imac-audio-module has the same hardcoding bug and is retired.
-ENTRYDIR=""
-for d in /boot/efi-xbootldr/loader/entries "$ENTRYDIR" \
-         /boot/efi/opensuse/loader/entries; do
-  [ -d "$d" ] || continue
-  # Prefer whichever actually holds entries.
-  if [ -n "$(ls -1 "$d"/*.conf 2>/dev/null)" ]; then ENTRYDIR=$d; break; fi
-  [ -z "$ENTRYDIR" ] && ENTRYDIR=$d
-done
+# This machine has two EFI partitions. The bootloader reads ONLY the ESP:
+# `bootctl status` reports "Boot Loader Entry Locations: ESP: /boot/efi (..., $BOOT)"
+# and nothing else, even though systemd-boot supports XBOOTLDR. An entry placed
+# on the XBOOTLDR is silently ignored, which cost several reboots on 2026-10-09/10.
+# See docs/boot-layout.md.
+#
+# So the ESP is authoritative. This matters: with ENTRYDIR pointing at the
+# XBOOTLDR, every path below inspects the wrong files and reports false failures.
+ENTRYDIR=/boot/efi/loader/entries
+[ -d "$ENTRYDIR" ] || ENTRYDIR=/boot/efi
+[ -n "$(ls -1 "$ENTRYDIR"/*.conf 2>/dev/null)" ] \
+  || warn "no .conf entries in $ENTRYDIR - check that the ESP holds the boot entry"
 
 installed_kernels() {
   local out v
@@ -87,7 +86,10 @@ installed_kernels() {
 say "############ imac-update $(date -Is)  dry=$DRY kernel=$WANT_KERNEL ############"
 [ "$(id -u)" -eq 0 ] || { say "run with sudo"; exit 1; }
 
-ESP_MIN_KERNEL=120   # M needed to install a kernel alongside existing initrds
+# One kernel+initrd pair is ~97M and the ESP is 197M, so exactly one fits.
+# With --kernel the ESP is emptied first (step 1); 150M covers the new pair
+# plus dracut's staging. Without it nothing is removed.
+ESP_MIN_KERNEL=150   # M needed once the ESP has been emptied for a new pair
 ESP_MIN_PATCH=45     # M needed for a non-kernel update
 
 #---------------------------------------------------------------- 0. preflight
@@ -139,16 +141,22 @@ fi
 
 if [ "$DRY" -eq 1 ]; then
   say ""
-  say "  [dry-run] would: prune stale BLS entries, run 'zypper up',"
+  say "  [dry-run] would: copy the current kernel pair to the XBOOTLDR as a"
+  say "  [dry-run] rollback (only with --kernel), empty the ESP, run 'zypper dup',"
   say "  [dry-run] confirm a DKMS codec build exists for the newest kernel,"
   say "  [dry-run] re-run imac-reapply, and report."
   say ""
+  tmpdk=$(mktemp)
   say "  audio codec status:"
-  if dkms status 2>/dev/null | grep -qi macbookpro; then
-    dkms status 2>/dev/null | grep -i macbookpro | sed 's/^/    /'
+  # Assign first, test after. `grep -q` inside an `if` pipeline makes grep exit
+  # at the first match and the pipeline status unreliable, which reported
+  # "no DKMS codec registered" on a machine with two installed.
+  if dkms status 2>/dev/null | grep -i macbookpro > "$tmpdk" 2>/dev/null; then
+    sed 's/^/    /' "$tmpdk"
   else
     say "    (no DKMS codec registered - speakers would be silent after reboot)"
   fi
+  rm -f "$tmpdk"
   say ""
   say "  pending updates:"
   zypper --non-interactive list-updates 2>/dev/null | head -30 | sed 's/^/    /' \
@@ -179,50 +187,56 @@ mkdir -p "$SAVEDIR"
 cp -p "$ENTRYDIR"/*.conf "$SAVEDIR/" 2>/dev/null
 say "  backed up all BLS entries to $SAVEDIR"
 
-# Prune ONLY snapper entries numbered >= 70. Never touches 5k-stackc-* entries
-# and never touches the loader default, so there is always a bootable fallback.
-prune_entries() {
-  for f in $(ls -1 "$ENTRYDIR"/ 2>/dev/null \
-             | grep -E '^opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$'); do
-    rm -f ""$ENTRYDIR"/$f"
-  done
-}
+# The ESP holds ONE kernel pair (~97M of 197M). Two do not fit, and the failure
+# is silent: `zypper dup` on 2026-10-09 installed 163 packages and then died
+# with "No free space in /boot/efi for new kernel", leaving the new kernel
+# package registered with rpm but no image on disk at all.
+#
+# Entries are not the problem - pruning them frees kilobytes. The payload is.
+# So when a kernel is wanted, the current pair is copied to the XBOOTLDR and
+# verified there FIRST, and only then is the ESP emptied.
+#
+# Nothing is deleted until its replacement is confirmed on the XBOOTLDR.
 
-if [ "$AVAIL" -lt "$NEED" ]; then
-  say "  not enough space; pruning stale snapper entries"
-  PRUNE=$(ls -1 "$ENTRYDIR"/ 2>/dev/null \
-          | grep -cE '^opensuse-slowroll-.*-(7[0-9]|8[0-9]|9[0-9])\.conf$')
-  say "  candidates: $PRUNE"
-  if [ "$PRUNE" -eq 0 ]; then
-    die "ESP too small (${AVAIL}M < ${NEED}M) and no prunable snapper entries left.
-  Free space on /boot/efi manually, or the update cannot proceed safely."
-  fi
-  prune_entries
+if [ "$WANT_KERNEL" -eq 1 ]; then
+  XB=/boot/efi-xbootldr
+  CUR_DIR="/boot/efi/opensuse-slowroll/$CURV"
+
+  mkdir -p "$XB/opensuse-slowroll/$CURV"
+  for pair in linux initrd; do
+    if [ ! -f "$XB/opensuse-slowroll/$CURV/$pair" ]; then
+      say "  preserving $CURV/$pair on the XBOOTLDR as the rollback pair"
+      cp -p "$CUR_DIR/$pair" "$XB/opensuse-slowroll/$CURV/$pair" \
+        || die "could not copy $pair to the XBOOTLDR; aborting before touching the ESP"
+    fi
+  done
+
+  # Verify the copy before removing anything. A truncated initrd was produced
+  # twice during the 2026-10-09 work by deleting the source too early.
+  for pair in linux initrd; do
+    a=$(stat -c %s "$CUR_DIR/$pair" 2>/dev/null)
+    b=$(stat -c %s "$XB/opensuse-slowroll/$CURV/$pair" 2>/dev/null)
+    [ -n "$a" ] && [ "$a" = "$b" ] \
+      || die "XBOOTLDR $pair is $b bytes but the source was $a; aborting"
+  done
+  lsinitrd "$XB/opensuse-slowroll/$CURV/initrd" >/dev/null 2>&1 \
+    || die "the XBOOTLDR rollback initrd is not a valid cpio; aborting"
+  say "  rollback pair verified on the XBOOTLDR (initrd opens cleanly)"
+
+  say "  emptying the ESP so the new pair fits"
+  rm -rf /boot/efi/opensuse-slowroll
   AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
   say "  ESP free now: ${AVAIL}M"
-  if [ "$AVAIL" -lt "$NEED" ]; then
-    die "still only ${AVAIL}M after pruning $PRUNE entries; need ${NEED}M.
-  Restore with:  cp -p $SAVEDIR/*.conf "$ENTRYDIR"/
-  Nothing has been updated; the system is unchanged apart from the pruned
-  (backed-up) BLS files."
-  fi
-  say "  pruned $PRUNE entries (backed up)"
+  [ "$AVAIL" -ge 150 ] || die "only ${AVAIL}M free after emptying the ESP; need 150M. Aborting."
+  say "  NOTE: the old entry dangles until the new kernel is installed."
+  say "  if this fails: cp -a $XB/opensuse-slowroll/$CURV /boot/efi/opensuse-slowroll/"
 else
-  say "  enough space; nothing pruned"
+  say "  kernel not being changed; ESP left alone (${AVAIL}M free)"
 fi
 
-# Sanity: the default entry and at least one kernel/initrd must still exist.
 CUR_ENTRY=$(sed -n 's/^default=//p;/^default[[:space:]]/s/^default[[:space:]]*//p' \
             /boot/efi/loader/loader.conf 2>/dev/null | head -1)
 say "  default boot entry: ${CUR_ENTRY:-unset}"
-if [ -n "$CUR_ENTRY" ] && [ ! -f ""$ENTRYDIR"/$CUR_ENTRY" ]; then
-  say "  restoring: default entry $CUR_ENTRY is missing"
-  cp -p "$SAVEDIR/$CUR_ENTRY" "$ENTRYDIR"/ 2>/dev/null \
-    && say "  restored $CUR_ENTRY" \
-    || die "default boot entry $CUR_ENTRY missing and unrestorable from $SAVEDIR"
-fi
-[ "$(ls -1 "$ENTRYDIR"/ 2>/dev/null | wc -l)" -gt 0 ] \
-  || die "no BLS entries left at all - restore from $SAVEDIR"
 
 #--------------------------------------------------------- 2. kernel decision
 step "2. kernel policy"
@@ -276,6 +290,37 @@ if [ "$CURV" = "$NEWEST2" ]; then
 else
   say "  NEW KERNEL INSTALLED - a reboot is REQUIRED to activate it"
   say "  after reboot, verify: 5K tiled output, audio, then sudo ~/bin/imac-reapply --check"
+fi
+
+#------------------------------- 4a. is the new kernel actually bootable on 5K?
+# The single most important check after a kernel update. A stock amdgpu has no
+# tiled_stitch parameter at all, so a new kernel without a patched module boots
+# to an untiled panel - or nothing at all - with nothing logged as an error.
+NEWEST3=$(ls -1 /boot/efi/opensuse-slowroll/ 2>/dev/null | sort -V | tail -1)
+if [ -n "$NEWEST3" ] && [ -d "/boot/efi/opensuse-slowroll/$NEWEST3" ]; then
+  UPD="/usr/lib/modules/$NEWEST3/updates/amdgpu.ko.zst"
+  if [ -f "$UPD" ]; then
+    say "  patched amdgpu present for $NEWEST3"
+    if command -v zstd >/dev/null 2>&1; then
+      T=$(mktemp /tmp/amdgpu.XXXXXX.ko)
+      zstd -dqf "$UPD" -o "$T" 2>/dev/null
+      say "    tiled_stitch parameter: $(modinfo -p "$T" 2>/dev/null | grep -c tiled_stitch) (1 = good)"
+      say "    srcversion: $(modinfo -F srcversion "$T" 2>/dev/null)"
+      rm -f "$T"
+    fi
+  else
+    warn "NO patched amdgpu for $NEWEST3 - do not make it the boot default."
+    warn "Build one: patches/amdgpu-5k/README.md, then rebuild the initrd."
+    warn "See docs/boot-layout.md for the full sequence."
+  fi
+  # and the initrd must actually contain it
+  I=""
+  for c in /boot/efi/opensuse-slowroll/$NEWEST3/initrd*; do [ -f "$c" ] && I=$c && break; done
+  if [ -n "$I" ]; then
+    say "    initrd carries updates/amdgpu.ko.zst: $(lsinitrd "$I" 2>/dev/null | grep -c 'updates/amdgpu.ko.zst')"
+    say "    initrd carries the DKMS codec:     $(lsinitrd "$I" 2>/dev/null | grep -c 'updates/snd-hda-codec-cs8409.ko.zst')"
+    say "    (both must be >= 1; the package's own initrd has neither)"
+  fi
 fi
 
 #------------------------------- 4b. rebuild the audio codec for the new kernel

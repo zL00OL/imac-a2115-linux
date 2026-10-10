@@ -30,7 +30,8 @@ the machine.
 | | |
 |---|---|
 | Distro | openSUSE Tumbleweed-Slowroll — **VERIFIED** |
-| Kernel | `7.2.7-1-default` (SUSE build, `e601a2d`) — **VERIFIED** |
+| Kernel | `7.2.8-1-default` — **VERIFIED, running since 2026-10-10** |
+| Previous kernel | `7.2.7-1-default` — rollback pair on the XBOOTLDR |
 | Firmware | 2094.80.5.0.0, released 2025-12-23 — **VERIFIED** |
 | Board | `Mac-AA95B1DDAB278B95` — **VERIFIED** |
 | Desktop | KDE Plasma 6 on Wayland (`kwin6-6.7.5`) — **VERIFIED** |
@@ -53,11 +54,33 @@ no longer runs.
 | Framebuffer | 5120×2880, one seamless desktop — **VERIFIED** |
 | Kernel parameter | `amdgpu.tiled_stitch=-1` — **VERIFIED** |
 | sysfs readback | `-1` — **VERIFIED** |
-| `tiled_stitch` provenance | **upstream in 7.2.7** — no patch needed for this |
-| amdgpu in use | the SUSE `kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst` (6,830,549 B) — **VERIFIED** |
-| amdgpu srcversion | `6A1BCCFD6F2E5A1A8F4807D` — **VERIFIED** |
-| Patched module also present | `updates/amdgpu.ko.zst` (4,975,046 B) — **loaded instead of the stock one** |
+| `tiled_stitch` provenance | **NOT upstream** — in both source trees, absent from both shipped modules |
+| amdgpu in use | `updates/amdgpu.ko.zst`, our build — **VERIFIED** |
+| amdgpu srcversion (loaded) | `31F26E96354E3264CF28120` — **VERIFIED** |
+| amdgpu srcversion (stock 7.2.8) | `4BFAA1013BED7E3FB557CF0` — **VERIFIED, not loaded** |
 | Driver | i915 for the iGPU, amdgpu for the panel — **VERIFIED** |
+
+**How to tell the patched driver apart from the stock one.** This is the check
+that matters, and it is the one that catches a stock module silently taking
+over:
+
+```bash
+cat /sys/module/amdgpu/srcversion     # loaded
+modinfo -F srcversion amdgpu          # on disk, same thing
+modinfo -n amdgpu                     # which file is being used
+modinfo -p amdgpu | grep tiled_stitch # 1 = patched, 0 = stock
+```
+
+The stock module reports `4BFAA1013BED7E3FB557CF0`; ours reports
+`31F26E96354E3264CF28120` on 7.2.8 and `6A1BCCFD6F2E5A1A8F4807D` on 7.2.7.
+
+**`modinfo -p` silently fails on compressed `.zst` modules** and prints nothing,
+which reads as "parameter absent". Decompress first:
+
+```bash
+zstd -dc /usr/lib/modules/7.2.8-1-default/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst > /tmp/s.ko
+modinfo -p /tmp/s.ko | grep -c tiled_stitch
+```
 
 ### The module actually loaded is the patched one
 
@@ -77,56 +100,79 @@ building `amdgpu.ko` from source still apply; what has changed is that a stock
 7.2.7 module would very likely work too. That has not been tested by removing
 the patched module, so treat it as **UNTESTED** rather than proven.
 
-### `tiled_stitch` is upstream in 7.2.7
+### `tiled_stitch` is NOT upstream
+
+This was documented as "upstream in 7.2.7" on the strength of grepping the
+*source* tree. That was wrong, and wrong in a way that would have led someone
+to drop a patch they still need. Measured properly:
 
 ```
-$ modinfo -p amdgpu | grep tiled_stitch
-tiled_stitch: Stitch supported Apple iMac 5K dual-tile panels into one logical
-display (-1 = auto/default, 0 = disable, 1 = enable supported iMac panels only) (int)
+source 7.2.7: /usr/src/linux-7.2.7-1/.../amdgpu_drv.c   tiled_stitch hits: 5
+source 7.2.8: /usr/src/linux-7.2.8-1/.../amdgpu_drv.c   tiled_stitch hits: 5
+
+shipped 7.2.7 module: tiled_stitch params = 0
+shipped 7.2.8 module: tiled_stitch params = 0   (srcversion 4BFAA1013BED7E3FB557CF0)
 ```
 
-and in the source, `/usr/src/linux-7.2.7-1/drivers/gpu/drm/amd/amdgpu/`:
+The SUSE source carries the parameter but the **binary module does not**.
+`tiled_stitch` has not reached a released kernel here, and
+`imac5k-stitch-layer-7.x.patch` — which adds the module parameter — is still
+required on both 7.2.7 and 7.2.8.
 
+Note also that `modinfo -p <file>.ko.zst` prints nothing at all, which reads
+easily as "the parameter is absent". Decompress before asking modinfo:
+
+```bash
+zstd -dc /usr/lib/modules/$(uname -r)/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst > /tmp/s.ko
+modinfo -p /tmp/s.ko | grep -c tiled_stitch   # 0 for stock
 ```
-amdgpu_drv.c:243   int amdgpu_tiled_stitch = -1; /* auto */
-amdgpu_drv.c:1054  module_param_named(tiled_stitch, amdgpu_tiled_stitch, int, 0444);
-amdgpu_drv.c:2513  if (amdgpu_dm_has_tiled_stitch_panel(adev)) {
+
+### DRM numbering changes between kernels
+
+Card and render indices are handed out in probe order, and probe order is not
+stable across kernels. Both of these have been observed here:
+
+| Kernel | iGPU | dGPU | Intel VA-API node |
+|---|---|---|---|
+| 7.2.7-1-default | `card0` | `card1` | **`renderD129`** |
+| 7.2.8-1-default | `card1` | `card2` | **`renderD128`** |
+
+**Never hardcode `renderD12N`.** Use the by-path symlinks, which are stable:
+
+```bash
+/dev/dri/by-path/pci-0000:00:02.0-render   # Intel UHD 630, H.264/HEVC/VP8 encode
+/dev/dri/by-path/pci-0000:01:00.0-render   # Radeon, no encoders
 ```
 
-This is the parameter the 7.2.2-era `imac5k-stitch-layer-7.x.patch` used to add
-by hand. On 7.2.7 the distro ships it.
+This matters in practice: OBS was configured with `renderD129` on 7.2.7, and on
+7.2.8 that same path silently points at the AMD card, which has no encoder at
+all. The screen still records; the video just stops being hardware-encoded.
 
-**However**, `tiled_stitch` is not the whole of the 5K story. It presents both
-tiles as one logical output, which is what makes an untile-aware compositor work.
-It does **not** include the second-tile wake (`0x4F1` root-latch pulse), which
-is not in the 7.2.7 source, nor genlock, nor the reboot handoff. Those remain
-the job of `imac5k-lean-core-7.2.x.patch`.
+To confirm which node is which on any boot:
 
-## Patches
+```bash
+for n in 128 129; do
+  echo "renderD$n -> $(basename $(readlink -f /sys/class/drm/renderD$n/device/driver))"
+done
+vainfo --display drm --device /dev/dri/by-path/pci-0000:00:02.0-render | grep -c EncSlice
+```
 
-Six vendored patches, pinned to upstream commit `43e7ccd851d5c53d2d66bd4ee163bb8da6a6c047`
-with SHA-256 checksums and a fixed apply order. Provenance and terms:
-`patches/amdgpu-5k/README.md` and `THIRD_PARTY_NOTICES.md`.
+### All six are still needed
 
-### Still needed on 7.2.7 — checked against the source
+Checked against the 7.2.8 source, which is what the machine now runs:
 
-| Patch | Status on 7.2.7 |
+| Patch | Status on 7.2.8 |
 |---|---|
-| `imac5k-stitch-layer-7.x.patch` | **OBSOLETE** — `tiled_stitch` is upstream now (`amdgpu_drv.c:1054`) |
-| `amdgpu-vce-suspend-in-reset.patch` | **OBSOLETE** — already upstream (`amdgpu_vce.c:327`) |
-| `amdgpu-vce3-ring-align-mask.patch` | **PARTLY** — `vce_v3_0.c:939` still has `align_mask = 0xf`; `:963` already has `0x1f`. The one the patch fixes is still needed. |
-| `imac5k-lean-core-7.2.x.patch` | **STILL NEEDED** — no `0x4f1` latch, no `sync_enabled`/genlock in the 7.2.7 source |
-| `imac5k-stitch-hide-slave.patch` | **STILL NEEDED** — `amdgpu_dm_link_is_tiled_stitch_slave()` is not upstream |
-| `amdgpu-hpd-skip-during-reset.patch` | **STILL NEEDED** — no `amdgpu_in_reset` guard in `hpd_rx_irq_work_suspend` |
+| `imac5k-stitch-layer-7.x.patch` | **needed** — adds the `tiled_stitch` module parameter, absent from the shipped module |
+| `imac5k-lean-core-7.2.x.patch` | **needed** — second-tile wake (`0x4f1`) and genlock are not upstream |
+| `imac5k-stitch-hide-slave.patch` | **needed** — `amdgpu_dm_link_is_tiled_stitch_slave()` is not upstream |
+| `amdgpu-hpd-skip-during-reset.patch` | **needed** — no `amdgpu_in_reset` guard in `hpd_rx_irq_work_suspend` |
+| `amdgpu-vce-suspend-in-reset.patch` | **needed** — no `amdgpu_in_reset` guard in `amdgpu_vce.c` |
+| `amdgpu-vce3-ring-align-mask.patch` | **needed** — `vce_v3_0.c:939` is still `align_mask = 0xf` |
 
-So two of the six are now redundant, and the stack is no longer a single
-all-or-nothing bundle: `imac5k-stitch-layer-7.x.patch` and
-`amdgpu-vce-suspend-in-reset.patch` can be dropped on 7.2.7, and dropping them
-requires no changes to the others.
-
-**This has not been tested as a reduced stack.** The verification above is a
-source inspection, and the machine is still running the full six. Reducing the
-stack and rebooting would be the real test.
+All six applied to `/usr/src/linux-7.2.8-1` at `--fuzz=0` with no conflicts, and
+the resulting module is what is running. The stack remains all-or-nothing: no
+subset has been tested, so treat all six as required.
 
 Verified against the **7.1.x–7.2.x** amdgpu series. On 7.3+ they will not apply
 without re-porting.
