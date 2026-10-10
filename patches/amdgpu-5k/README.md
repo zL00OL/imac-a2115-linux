@@ -21,7 +21,7 @@ meant a reader could not get from this repo to a working 5K panel.
 Verify before applying. These are the SHA-256 sums of the files as vendored:
 
 ```
-ad9f9674adf815ea2733fdbddb955a914482291c1d4c70f2d8e416db5117f40e  imac5k-lean-core-7.2.x.patch
+568d9f38e287cebf4020613d99c0162fe64be4fefe4ea803bb95548d281dd1f8  imac5k-lean-core-7.2.x.patch
 7f6ca13ca4354305ac1dfe0d9a9e7783daed8375c1117836c13b384fc9f1bc0c  imac5k-stitch-layer-7.x.patch
 ce1600998f5bf8cf6c7746617528a9491d6a385022a094cc3c99d14b168281c2  imac5k-stitch-hide-slave.patch
 4286fed046fd53077df1fb738629d9e443fa159fbca205dc09d54f5d4df78f9f  amdgpu-hpd-skip-during-reset.patch
@@ -31,7 +31,7 @@ ce1600998f5bf8cf6c7746617528a9491d6a385022a094cc3c99d14b168281c2  imac5k-stitch-
 
 ```bash
 cd patches/amdgpu-5k && sha256sum -c <<'EOF'
-ad9f9674adf815ea2733fdbddb955a914482291c1d4c70f2d8e416db5117f40e  imac5k-lean-core-7.2.x.patch
+568d9f38e287cebf4020613d99c0162fe64be4fefe4ea803bb95548d281dd1f8  imac5k-lean-core-7.2.x.patch
 7f6ca13ca4354305ac1dfe0d9a9e7783daed8375c1117836c13b384fc9f1bc0c  imac5k-stitch-layer-7.x.patch
 ce1600998f5bf8cf6c7746617528a9491d6a385022a094cc3c99d14b168281c2  imac5k-stitch-hide-slave.patch
 4286fed046fd53077df1fb738629d9e443fa159fbca205dc09d54f5d4df78f9f  amdgpu-hpd-skip-during-reset.patch
@@ -107,14 +107,48 @@ was wrong. The SUSE **source** tree carries `tiled_stitch` but the **shipped
 binary module** does not, so the stitch layer is still load-bearing on both
 7.2.7 and 7.2.8.
 
-| Patch | On 7.2.8 |
-|---|---|
-| `imac5k-stitch-layer-7.x.patch` | needed — adds `tiled_stitch`, absent from the shipped module |
+| Patch | On 7.2.8 | On 7.2.9 |
+|---|---|---|
+| `imac5k-stitch-layer-7.x.patch` | needed — adds `tiled_stitch`, absent from the shipped module | needed, applies unchanged |
+| `imac5k-lean-core-7.2.x.patch` | needed — second-tile wake and genlock are not upstream | needed; **one context line changed** (see below) |
 | `imac5k-lean-core-7.2.x.patch` | needed — second-tile wake and genlock are not upstream |
 | `imac5k-stitch-hide-slave.patch` | needed — helper is not upstream |
-| `amdgpu-hpd-skip-during-reset.patch` | needed — no `amdgpu_in_reset` guard upstream |
+| `amdgpu-hpd-skip-during-reset.patch` | needed — no `amdgpu_in_reset` guard upstream | | needed, applies unchanged |
 | `amdgpu-vce-suspend-in-reset.patch` | needed — no `amdgpu_in_reset` guard in `amdgpu_vce.c` |
 | `amdgpu-vce3-ring-align-mask.patch` | needed — `vce_v3_0.c:939` is still `0xf` |
+
+### 7.2.9: an upstream regression, and why lean-core changed
+
+7.2.9 keeps `dp_write_tiled_stream_disable_latch()` **defined** in
+`display/dc/link/link_dpms.c` but removed its only **call site**. On an Apple
+tiled panel the stream-disable latch is then never re-armed, which strands the
+second tile. The function being present but unreachable is why this is easy to
+miss — nothing fails to compile.
+
+`imac5k-lean-core-7.2.x.patch` re-adds the call, and is what makes this work on
+7.2.9. One context line differs between the two kernels:
+
+```
+ 7.2.8:  deallocate_usb4_bandwidth(pipe_ctx->stream);
+ 7.2.9:  deallocate_usb4_bandwidth(stream);
+```
+
+The patch now carries the 7.2.9 form, which also applies to 7.2.8 because
+`pipe_ctx` is already in scope there. Verified: all six apply at `--fuzz=0`
+against a pristine `kernel-source-7.2.9-1.0.16.1.sr20260901`, and the resulting
+module reports a distinct srcversion with `tiled_stitch` present.
+
+Building 7.2.9 also needs a signing key in its objtree, which
+`kernel-source` does not create:
+
+```
+openssl genrsa -traditional -out \
+  /usr/src/linux-<ver>-obj/x86_64/default/.kernel_signing_key.pem 2048
+```
+
+That is **not** sufficient on its own — the kernel's own `certs/extract-cert`
+rejects it with `no start line` because it requires PKCS#8, not PKCS#1. Copy a
+known-good pair from an earlier objtree instead, which is what was done here.
 
 Deciding whether the module is patched or stock:
 

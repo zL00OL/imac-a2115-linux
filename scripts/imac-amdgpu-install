@@ -147,7 +147,7 @@ say "  patches: $PATCHDIR"
 # changed patch set is exactly the kind of thing that produces a module that
 # compiles, loads, and does nothing useful.
 if ! (cd "$PATCHDIR" && sha256sum -c >/dev/null 2>&1 <<'EOF'
-ad9f9674adf815ea2733fdbddb955a914482291c1d4c70f2d8e416db5117f40e  imac5k-lean-core-7.2.x.patch
+568d9f38e287cebf4020613d99c0162fe64be4fefe4ea803bb95548d281dd1f8  imac5k-lean-core-7.2.x.patch
 7f6ca13ca4354305ac1dfe0d9a9e7783daed8375c1117836c13b384fc9f1bc0c  imac5k-stitch-layer-7.x.patch
 ce1600998f5bf8cf6c7746617528a9491d6a385022a094cc3c99d14b168281c2  imac5k-stitch-hide-slave.patch
 4286fed046fd53077df1fb738629d9e443fa159fbca205dc09d54f5d4df78f9f  amdgpu-hpd-skip-during-reset.patch
