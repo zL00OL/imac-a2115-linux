@@ -17,11 +17,14 @@ and tells you which section below applies.
 
 ## Kernel 7.2.7 and later: no patch needed for the stitching
 
-> **Verified 2026-10-09 on the reference machine, now running `7.2.7-1-default`.**
 > Upstream `amdgpu` gained native `tiled_stitch` between 7.2.2 and 7.2.7, and
-> **the SUSE binary module for 7.2.7 ships it** — a claim you will find
-> document claimed the shipped module lacked it and had to be rebuilt from
-> source. That is wrong, and the measurement is below.
+> **the SUSE binary module ships it** — claims that it must be rebuilt from
+> source are wrong, and the measurement is below.
+>
+> Note this is about the *parameter only*. `patches/amdgpu-5k/imac5k-stitch-layer-7.x.patch`
+> is still required, because the shipped module has the parameter but not the
+> second-tile implementation behind it. See
+> [All six are still needed](reference-system.md#all-six-are-still-needed).
 
 ```c
 // drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c, 7.2.7
@@ -189,15 +192,19 @@ the rest.
 ---
 
 > [!NOTE]
-> **The `sysfs` readback for `tiled_stitch` is unverified.** The kernel command
-> line is the authoritative value on this machine: `amdgpu.tiled_stitch=-1`.
-> You may find claims that `1` is the expected `sysfs`
-> parameter while the command line said `-1`, which is a contradiction nobody
-> resolved. If the parameter is declared `bool` in the driver, `-1` and `1` both
-> normalise to `1` on read and the old comment was accidentally right; if it is
-> an `int`, it reads back verbatim and the old comment was wrong.
+> **`tiled_stitch` is declared `int`, so it reads back verbatim.** Settled by
+> measurement on 7.2.8:
 >
-> **How to record the answer.** Open an issue on this repository titled
+> ```
+> module_param_named(tiled_stitch, amdgpu_tiled_stitch, int, 0444);
+> parm: tiled_stitch: ... (-1 = auto/default, 0 = disable, 1 = enable ...) (int)
+> ```
+>
+> Any claim that `sysfs` should report `1` while the command line says `-1` is
+> wrong: there is no `bool` normalisation to perform. The kernel command line
+> remains authoritative — `amdgpu.tiled_stitch=-1` on this machine.
+>
+> **How to record a change.** Open an issue on this repository titled
 > `tiled_stitch sysfs readback: <1 or -1>` and paste the output of all four:
 >
 > ```bash

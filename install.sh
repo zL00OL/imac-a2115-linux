@@ -17,11 +17,13 @@
 #
 # The split is not arbitrary: only /usr/local/bin is on a normal user's PATH, and
 # putting a root-only helper there would invite running it unprivileged and
-# getting a confusing permission error. Earlier revisions mixed ~/bin and
-# /usr/local/bin for the same scripts, so a documented command did not exist.
+# getting a confusing permission error.
 #
 # THIS IS THE ONLY INSTALLER. If a file is not installed here, it is not part of
 # the supported surface.
+# set -u, deliberately not set -e: every install goes through run(), which counts
+# failures and lets the script finish so it can report all of them at once.
+# Aborting on the first error would hide the rest.
 set -u
 REPO=$(cd "$(dirname "$0")" && pwd)
 DRY=0; UNINSTALL=0
@@ -50,8 +52,19 @@ SBIN_BIN="esp-prune-kernels"
 HOOK_FILES="01-xbootldr-layout.install 45-amdgpu-5k.install 97-esp-prune.install 96-imac-setos.install"
 UNIT_FILES="imac-amdgpu-build@.service"
 
+FAILED=0
 say(){ printf '%s\n' "$*"; }
-run(){ if [ "$DRY" -eq 1 ]; then say "    dry-run: $*"; else "$@"; fi; }
+# Every install goes through here so a failure is counted. A previous version ran
+# bare `install` calls and `[ -f x ] && install ...` tests; the latter exits
+# non-zero when the file is absent, and nothing counted either case, so the
+# script could print "done" after failing to install half of itself.
+run(){
+  if [ "$DRY" -eq 1 ]; then say "    dry-run: $*"; return 0; fi
+  if "$@"; then return 0; fi
+  say "    ERROR: $*"
+  FAILED=$((FAILED+1))
+  return 1
+}
 
 if [ "$(id -u)" -ne 0 ]; then echo "must run as root (use sudo)" >&2; exit 1; fi
 
@@ -72,7 +85,8 @@ run install -d -m 0755 /usr/local/sbin
 
 say "  user-facing -> $BIN"
 for f in $USER_BIN; do
-  [ -f "$REPO/scripts/$f" ] && run install -m 0755 "$REPO/scripts/$f" "$BIN/$f"
+  if [ -f "$REPO/scripts/$f" ]; then run install -m 0755 "$REPO/scripts/$f" "$BIN/$f"
+  else say "    ERROR: missing scripts/$f"; FAILED=$((FAILED+1)); fi
 done
 
 say "  root / systemd -> $LIBEXEC"
@@ -84,9 +98,16 @@ for f in $LIBEXEC_BIN; do
 done
 
 say "  patches -> $SHARE/patches/amdgpu-5k"
+NPATCH=0
 for f in "$REPO"/patches/amdgpu-5k/*.patch; do
-  run install -m 0644 "$f" "$SHARE/patches/amdgpu-5k/"
+  run install -m 0644 "$f" "$SHARE/patches/amdgpu-5k/" && NPATCH=$((NPATCH+1))
 done
+# Six is the known set. Fewer means a truncated checkout, and a partial patch set
+# is the kind of thing that fails much later and much more confusingly.
+if [ "$NPATCH" -ne 6 ]; then
+  say "    ERROR: expected 6 patches, installed $NPATCH"
+  FAILED=$((FAILED+1))
+fi
 
 say "  docs -> $DOCS"
 for f in README.md THIRD_PARTY_NOTICES.md docs/*.md; do
@@ -98,17 +119,20 @@ for f in $HOOK_FILES; do
   src=""
   [ -f "$REPO/kernel/$f" ] && src="$REPO/kernel/$f"
   [ -f "$REPO/$f" ]        && src="$REPO/$f"
-  if [ -n "$src" ]; then run install -m 0755 "$src" "$HOOKS/$f"; else say "    NOTE $f not in repo (may already be installed)"; fi
+  if [ -n "$src" ]; then run install -m 0755 "$src" "$HOOKS/$f"
+  else say "    ERROR: no source for hook $f"; FAILED=$((FAILED+1)); fi
 done
 
 say "  sbin (legacy path used by 97-esp-prune.install) -> /usr/local/sbin"
 for f in $SBIN_BIN; do
-  [ -f "$REPO/scripts/$f" ] && run install -m 0755 "$REPO/scripts/$f" "/usr/local/sbin/$f"
+  if [ -f "$REPO/scripts/$f" ]; then run install -m 0755 "$REPO/scripts/$f" "/usr/local/sbin/$f"
+  else say "    ERROR: missing scripts/$f"; FAILED=$((FAILED+1)); fi
 done
 
 say "  units -> $UNITS"
 for f in $UNIT_FILES; do
-  [ -f "$REPO/kernel/$f" ] && run install -m 0644 "$REPO/kernel/$f" "$UNITS/$f"
+  if [ -f "$REPO/kernel/$f" ]; then run install -m 0644 "$REPO/kernel/$f" "$UNITS/$f"
+  else say "    ERROR: missing kernel/$f"; FAILED=$((FAILED+1)); fi
 done
 
 run systemctl daemon-reload
@@ -124,4 +148,10 @@ say "    sudo chmod 0440 /etc/sudoers.d/imac-brightness"
 say "    sudo visudo -cf /etc/sudoers.d/imac-brightness    # MUST pass"
 
 say ""
+if [ "$FAILED" -gt 0 ]; then
+  say "FAILED: $FAILED step(s) did not complete. The install is INCOMPLETE."
+  say "Fix the errors above and re-run. Do not reboot until:"
+  say "  $BIN/imac-verify    reports the machine healthy"
+  exit 1
+fi
 say "done. Verify with:  $BIN/imac-verify"

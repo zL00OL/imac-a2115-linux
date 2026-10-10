@@ -9,10 +9,10 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 #==============================================================================
 # imac-update - update openSUSE on this iMac and re-apply every local patch
 #
-#   sudo ~/bin/imac-update              # full update, keep current kernel
-#   sudo ~/bin/imac-update --dry-run    # show what would happen, change nothing
-#   sudo ~/bin/imac-update --kernel     # ALSO move to the newest kernel
-#   sudo ~/bin/imac-update --reboot     # reboot at the end (asks first)
+#   sudo imac-update              # full update, keep current kernel
+#   sudo imac-update --dry-run    # show what would happen, change nothing
+#   sudo imac-update --kernel     # ALSO move to the newest kernel
+#   sudo imac-update --reboot     # reboot at the end (asks first)
 #
 # Order matters: prune ESP -> update -> rebuild the audio codec for whatever
 # kernel is now newest -> re-apply -> (reboot).
@@ -38,7 +38,17 @@ done
 LOG=/var/log/imac-update.log
 # This runs under sudo, so ~ is /root and not the user's home. Use an explicit
 # path or the script silently reports the helpers as missing.
-BIN=$UHOME/bin
+# install.sh puts user-facing commands in /usr/local/bin. Prefer that, and fall
+# back to the invoking user's ~/bin, which is where these scripts lived before
+# install.sh existed. Without the fallback a fresh install reported
+# "imac-reapply MISSING - patches NOT re-applied!" at the end of every update.
+if [ -x /usr/local/bin/imac-reapply ]; then
+  BIN=/usr/local/bin
+elif [ -x "$UHOME/bin/imac-reapply" ]; then
+  BIN=$UHOME/bin
+else
+  BIN=/usr/local/bin
+fi
 say()  { printf '%s\n' "$*" | tee -a "$LOG"; }
 step() { say ""; say "=== $* ==="; }
 ok()   { say "  [ ok ] $*"; }

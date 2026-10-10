@@ -133,27 +133,39 @@ less docs/boot-layout.md
 # 2. Install the tooling (hooks, helpers, patches, docs).
 sudo ./install.sh
 #    It deliberately does NOT touch sudoers. Do that by hand, with a visudo check:
-sed "s/^YOUR_USER/$USER" sudoers/imac-brightness | \
+sed "s/^YOUR_USER/$USER/" sudoers/imac-brightness | \
   sudo tee /etc/sudoers.d/imac-brightness >/dev/null
 sudo chmod 0440 /etc/sudoers.d/imac-brightness
 sudo visudo -cf /etc/sudoers.d/imac-brightness      # must pass
 
-# 3. THE DESTRUCTIVE STEP. Back up the ESP partition before touching kernels.
-#    Do not skip this: a cold-boot failure on this panel needs physical access.
-sudo ./scripts/imac-verify            # read-only; paste its output in an issue
+# 3. Read-only diagnosis first. Paste this output when reporting an issue.
+sudo ./scripts/imac-verify
 
-# 4. Kernel updates. The 45-amdgpu-5k hook builds the patched module for you,
+# 4. THE DESTRUCTIVE STEP, and it is separate on purpose. Back up BEFORE any
+#    kernel update. Do not skip it: the cold-boot failure documented in
+#    docs/tiled-5k.md needs physical access to recover from.
+#
+#    Back up the root partition - that is where set_os-patched kernels and the
+#    boot entries live, and it is the thing you cannot rebuild under time
+#    pressure. 338G free on the reference machine; check yours with df -h /.
+sudo dd if=/dev/nvme0n1p4 of=/mnt/doomsday/root-$(date +%Y%m%d).img bs=64M \
+        conv=fsync status=progress
+sync && sudo md5sum /mnt/doomsday/root-*.img | sudo tee /mnt/doomsday/SHA256SUMS
+
+# 5. Kernel updates. The 45-amdgpu-5k hook builds the patched module for you,
 #    but it takes 20-45 min and runs DETACHED - the new kernel is NOT safe to
 #    boot until it finishes.
 sudo imac-update --dry-run
 sudo imac-update --kernel
-#    ...then wait, before rebooting:
+
+# 6. WAIT for the build before rebooting. imac-amdgpu-install is in
+#    /usr/local/libexec (not on your PATH), so call it by full path.
 journalctl -fu imac-amdgpu-build@<new-kver>
-imac-amdgpu-install --check --kver <new-kver>       # must not say "stock"
+sudo /usr/local/libexec/imac-amdgpu-install --check --kver <new-kver>
 ```
 
-**The one rule:** never boot a kernel whose `imac-amdgpu-install --check` says
-`stock`. You will get a single tile, and it will not tell you why.
+**The one rule:** never boot a kernel whose `--check` says `stock`. You will get
+a single tile, and it will not tell you why.
 
 ## Start here
 
