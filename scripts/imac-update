@@ -306,7 +306,7 @@ if [ "$CURV" = "$NEWEST2" ]; then
   say "  same kernel: a reboot is optional"
 else
   say "  NEW KERNEL INSTALLED - a reboot is REQUIRED to activate it"
-  say "  after reboot, verify: 5K tiled output, audio, then sudo ~/bin/imac-reapply --check"
+  say "  after reboot, verify: 5K tiled output, audio, then sudo imac-reapply --check"
 fi
 
 #------------------------------- 4a. is the new kernel actually bootable on 5K?
@@ -356,7 +356,7 @@ step "4b. audio codec module for kernel $NEWEST2"
 DKMS_LINE=$(dkms status 2>/dev/null | grep -i macbookpro | head -1)
 if [ -z "$DKMS_LINE" ]; then
   bad "no DKMS codec registered - the speakers WILL be silent after reboot"
-  hint "sudo scripts/imac-audio --install"
+  hint "sudo imac-audio --install"
   hint "see docs/audio.md for the driver source and build guards"
 else
   ok "DKMS codec registered: $DKMS_LINE"
@@ -366,7 +366,7 @@ else
   else
     warn "no DKMS build listed for $NEWEST2 yet"
     warn "dkms normally builds on kernel install; force it if it did not:"
-    hint "sudo scripts/imac-audio --install -k $NEWEST2"
+    hint "sudo imac-audio --install -k $NEWEST2"
   fi
 fi
 
@@ -448,7 +448,7 @@ else
   say ""
   if [ "$WANT_KERNEL" -eq 1 ]; then
     say "No reboot performed. Before you do, confirm the build finished:"
-    say "  sudo /usr/local/libexec/imac-amdgpu-install --check --kver $NEWEST2"
+    say "  sudo imac-amdgpu-install --check --kver $NEWEST2"
   else
     say "No reboot performed. When you do reboot, verify the 5K tiled output."
   fi

@@ -115,7 +115,7 @@ elif in_list "$AMDSRC" "$REF_PATCHED_SRCV"; then
 elif in_list "$AMDSRC" "$REF_STOCK_SRCV"; then
   no "STOCK amdgpu is running ($AMDSRC) - the 5K patch is missing"
   info "a stock amdgpu has no tiled_stitch parameter, so this boots ONE tile"
-  info "rebuild it: sudo /usr/local/libexec/imac-amdgpu-install --kver $(uname -r)"
+  info "rebuild it: sudo imac-amdgpu-install --kver $(uname -r)"
   info "see docs/recovery.md#recovery-2"
 else
   warn "amdgpu srcversion $AMDSRC matches neither the reference patched nor stock build"
@@ -217,7 +217,7 @@ if [ -x /usr/local/bin/imac-brightness ] && [ -x /usr/local/libexec/imac-brightn
   ok "brightness helpers installed"
   info "KDE's slider works on its own; these are for an exact level and min/max"
 else
-  info "scripts/imac-audio --helpers installs the brightness helpers"
+  info "imac-audio --helpers installs the brightness helpers"
 fi
 
 sec "Audio - the codec path"
@@ -229,7 +229,7 @@ if [ -n "$DK" ]; then
     ok "a build exists for the running kernel"
   else
     warn "no DKMS build listed for $K - internal speakers may be silent"
-    info "sudo scripts/imac-audio --install -k $K"
+    info "sudo imac-audio --install -k $K"
   fi
 else
   no "no DKMS codec registered - internal speakers will be silent"
@@ -244,7 +244,7 @@ if [ "$NP" -ge 10 ]; then
   ok "headset capture patch is loaded ($NP module parameters)"
 elif [ "$NP" -eq 0 ]; then
   no "driver is UNPATCHED (0 parameters) - EarPods capture will be digital silence"
-  info "sudo scripts/imac-audio --install"
+  info "sudo imac-audio --install"
 else
   warn "$NP module parameters - expected 10 if the headset patch is loaded"
 fi

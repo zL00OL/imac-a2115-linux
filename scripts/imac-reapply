@@ -9,9 +9,9 @@ UHOME=$(getent passwd "$UH" 2>/dev/null | cut -d: -f6)
 #==============================================================================
 # imac-reapply - re-apply all iMac A2115 customisations after a system update
 #
-#   sudo ~/bin/imac-reapply              # do everything
-#   sudo ~/bin/imac-reapply --check      # report only, change nothing
-#   sudo ~/bin/imac-reapply --fix-opencl # only the fragile OpenCL part
+#   sudo imac-reapply              # do everything
+#   sudo imac-reapply --check      # report only, change nothing
+#   sudo imac-reapply --fix-opencl # only the fragile OpenCL part
 #
 # --fix-X applies section X and skips the rest entirely: kernel, esp, opencl,
 # audio, sddm, resolve, boot. --check ignores these and reports every section.
@@ -58,7 +58,7 @@ sel()  { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 : > "$LOG"
 say "=== imac-reapply $(date -Is)  mode=$([ $CHECK -eq 1 ] && echo check || echo apply) ==="
-[ "$(id -u)" -eq 0 ] || { say "must run as root: sudo ~/bin/imac-reapply"; exit 1; }
+[ "$(id -u)" -eq 0 ] || { say "must run as root: sudo imac-reapply"; exit 1; }
 
 
 # This machine has two EFI partitions. The BLS entries live on XBOOTLDR and the
@@ -112,7 +112,7 @@ elif echo "$K" | grep -qx "$CUR"; then
   say "    the patched audio codec and the 5K initrd are per-kernel."
   say "    DKMS rebuilds the codec by itself; confirm a build exists for $NEWEST:"
   say "      dkms status | grep macbookpro"
-  say "    If it does not:  sudo scripts/imac-audio --install -k $NEWEST"
+  say "    If it does not:  sudo imac-audio --install -k $NEWEST"
   say "    After reboot verify: tiled 5K output, then audio."
 else
   warn "running $CUR is not among installed: $(echo "$K" | tr '\n' ' ')"
@@ -191,7 +191,7 @@ fi
   # script named it as the wrong fork and told you to remove it; that was
   # backwards and would have disabled headset capture.
   ok "CS8409 DKMS codec registered - this is the working codec configuration"
-  hint "scripts/imac-audio --check    # confirms the headset patch is actually loaded"
+  hint "imac-audio --check    # confirms the headset patch is actually loaded"
 fi
 RESOLVED=$(modinfo -n snd_hda_codec_cs8409 2>/dev/null)
 say "  cs8409 module: ${RESOLVED:-not found}"
@@ -199,7 +199,7 @@ case "$RESOLVED" in
   */updates/*) ok "patched DKMS codec active via updates/" ;;
   "")          bad "no cs8409 module found" ;;
   *)           warn "the in-tree codec wins, not the DKMS build"
-               hint "sudo scripts/imac-audio --install" ;;
+               hint "sudo imac-audio --install" ;;
 esac
 # Check DKMS directly. scripts/imac-audio-module is retired; it inspected an
 # ext01 layout that DKMS beats. See scripts/imac-audio and docs/audio.md.
@@ -208,7 +208,7 @@ DKMS_ALL=$(dkms status 2>/dev/null)
     printf '%s\n' "$DKMS_ALL" | grep -i macbookpro | sed 's/^/  /'
   else
   warn "no DKMS codec registered for the CS8409"
-  hint "sudo scripts/imac-audio --install   # see docs/audio.md"
+  hint "sudo imac-audio --install   # see docs/audio.md"
 fi
 
 # --- PipeWire routing ---

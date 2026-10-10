@@ -130,7 +130,9 @@ cd imac-linux
 # 1. Read this first. It explains the failure you are most likely to have.
 less docs/boot-layout.md
 
-# 2. Install the tooling (hooks, helpers, patches, docs).
+# 2. Install the tooling (hooks, helpers, patches, docs). This also links the
+#    commands into /usr/sbin, because sudo's secure_path omits /usr/local/bin -
+#    without that, `sudo imac-update` fails with "command not found".
 sudo ./install.sh
 #    It deliberately does NOT touch sudoers. Do that by hand, with a visudo check:
 sed "s/^YOUR_USER/$USER/" sudoers/imac-brightness | \
@@ -158,10 +160,9 @@ sync && sudo md5sum /mnt/doomsday/root-*.img | sudo tee /mnt/doomsday/SHA256SUMS
 sudo imac-update --dry-run
 sudo imac-update --kernel
 
-# 6. WAIT for the build before rebooting. imac-amdgpu-install is in
-#    /usr/local/libexec (not on your PATH), so call it by full path.
+# 6. WAIT for the build before rebooting.
 journalctl -fu imac-amdgpu-build@<new-kver>
-sudo /usr/local/libexec/imac-amdgpu-install --check --kver <new-kver>
+sudo imac-amdgpu-install --check --kver <new-kver>     # must not say "stock"
 ```
 
 **The one rule:** never boot a kernel whose `--check` says `stock`. You will get

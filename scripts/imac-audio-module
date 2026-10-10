@@ -31,10 +31,10 @@ cat >&2 <<'EOF'
 
   Use instead:
 
-      sudo scripts/imac-audio --check     verify what is loaded now
-      sudo scripts/imac-audio --install   build and install the patched driver
-      sudo scripts/imac-audio --mic       microphone diagnostics
-      scripts/imac-audio --help           full options
+      sudo imac-audio --check     verify what is loaded now
+      sudo imac-audio --install   build and install the patched driver
+      sudo imac-audio --mic       microphone diagnostics
+      imac-audio --help           full options
 
   See docs/audio.md for why the old conclusion was wrong.
 

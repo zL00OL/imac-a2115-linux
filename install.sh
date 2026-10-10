@@ -74,6 +74,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
   for f in $LIBEXEC_BIN; do run rm -f "$LIBEXEC/$f"; done
   for f in $HOOK_FILES;  do run rm -f "$HOOKS/$f"; done
   for f in $UNIT_FILES;  do run rm -f "$UNITS/$f"; done
+for f in $USER_BIN $LIBEXEC_BIN $SBIN_BIN; do
+  [ -L "/usr/sbin/$f" ] && run rm -f "/usr/sbin/$f"
+done
   run rm -rf "$SHARE" "$DOCS"
   say "done. Re-enable or disable any units you had enabled separately."
   exit 0
@@ -135,6 +138,31 @@ for f in $UNIT_FILES; do
   else say "    ERROR: missing kernel/$f"; FAILED=$((FAILED+1)); fi
 done
 
+# Symlink into /usr/sbin so `sudo imac-update` works by bare name.
+#
+# sudo replaces PATH with secure_path, which is
+# /usr/sbin:/usr/bin:/sbin:/bin by default and does NOT include
+# /usr/local/bin. So an installer that only writes /usr/local/bin produces a
+# machine where every documented command fails with "command not found" the
+# moment sudo is involved - which is exactly how these commands are run.
+#
+# A symlink is deliberate rather than editing secure_path in sudoers: a typo in
+# sudoers locks you out of root on a machine that needs physical access to
+# recover. /usr/sbin is on secure_path and is the conventional home for
+# administrative commands anyway.
+say "  sudo-visible symlinks -> /usr/sbin"
+for f in $USER_BIN $SBIN_BIN; do
+  for d in "$BIN" /usr/local/sbin; do
+    [ -x "$d/$f" ] || continue
+    if run ln -sfn "$d/$f" "/usr/sbin/$f"; then :; fi
+    break
+  done
+done
+# libexec helpers are root-only, so they go straight there rather than via bin.
+for f in $LIBEXEC_BIN; do
+  [ -x "$LIBEXEC/$f" ] && run ln -sfn "$LIBEXEC/$f" "/usr/sbin/$f"
+done
+
 run systemctl daemon-reload
 
 #--- sudoers. Deliberately NOT installed automatically: a wrong sudoers file can
@@ -154,4 +182,9 @@ if [ "$FAILED" -gt 0 ]; then
   say "  $BIN/imac-verify    reports the machine healthy"
   exit 1
 fi
-say "done. Verify with:  $BIN/imac-verify"
+say ""
+say "All of these now work by bare name under sudo:"
+say "  sudo imac-update            sudo imac-verify         sudo imac-reapply"
+say "  sudo imac-amdgpu-install    sudo imac-audio"
+say ""
+say "done. Verify with:  sudo imac-verify"
