@@ -2,15 +2,17 @@
 
 **Goal: one seamless 5120x2880 desktop across both panels, no seam**
 
-> [!CAUTION]
-> **The vendored 5K patches have no confirmed licence.** They are derived from
-> GPL-2.0 kernel code but carry no licence header, and one upstream fork publishes
-> no licence at all. Treat `patches/amdgpu-5k/` as **GPL-2.0-only by assumption**,
-> *not* as MIT like the rest of this repo. Publishing them for reference is fine;
-> redistributing them inside a product needs the terms confirmed with the
-> upstream authors first. Full detail in
+> [!NOTE]
+> **The vendored 5K patches are not blanket-MIT.** The six files under
+> `patches/amdgpu-5k/` have three different provenances: one verbatim upstream
+> kernel backport and three original fixes (both **GPL-2.0-only** as kernel
+> patches), and two derived from community work that is **MIT on the evidence
+> available**. One upstream, `mcirsta`, publishes no licence at all, so its
+> contribution rests on an inference rather than a grant.
+>
+> This only matters if you intend to redistribute them inside a product.
+> Cloning, building, and using them is not the concern. Per-patch terms are in
 > [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md#licensing-of-the-vendored-patches--unresolved).
-  (GitHub's anchor for the `⚠ Licensing…` heading drops the glyph.)
 
 ## Vocabulary
 

@@ -1,10 +1,17 @@
 # Credits and third-party notices
 
 This repository contains **documentation, shell scripts, and vendored kernel
-patches**. Every file under `scripts/` and `docs/` was written for this machine.
-The six files under `patches/amdgpu-5k/` are **not** original work and **not**
-covered by this repository's `LICENSE`. See "Licensing of the vendored patches"
-below — the situation there is unresolved and should be read before redistributing.
+patches**. Every file under `scripts/`, `install.sh`, `kernel/` and `docs/` was
+written for this machine and is MIT, per `LICENSE`.
+
+The six files under `patches/amdgpu-5k/` are **not** uniformly original work and
+are **not** blanket-MIT. They have three different provenances and therefore three
+different licence answers — one verbatim upstream kernel backport (GPL-2.0-only),
+three original fixes (GPL-2.0-only as kernel patches), and two derived from
+community work that is MIT on the evidence available. **Per-patch terms are in
+[Licensing of the vendored patches](#licensing-of-the-vendored-patches--unresolved).
+One upstream (`mcirsta`) publishes no licence at all; that gap is stated plainly
+rather than papered over, and it matters only if you intend to redistribute.
 
 What follows is attribution for the community projects this work builds on, for
 the upstream software it relies on, and for the terms the vendored patches keep.
@@ -121,35 +128,52 @@ Recorded because they are the most useful part of the history:
 
 | Path | Status |
 |---|---|
-| `scripts/`, `docs/`, `README.md` | Original to this project. Covered by `LICENSE`. |
-| `patches/amdgpu-5k/*.patch` | **Third-party.** Derived from the projects credited above; `imac5k-stitch-layer-7.x.patch` carries erik2's stitch unchanged. **Not** covered by `LICENSE`. |
-| `reference/`, `LICENSE`, `THIRD_PARTY_NOTICES.md` | Original, except as noted above. |
+| `scripts/`, `install.sh`, `kernel/`, `docs/`, `README.md` | Original to this project. MIT, per `LICENSE`. |
+| `patches/amdgpu-5k/*.patch` | **Mixed provenance, per patch.** The six files are not all the same origin or the same licence — see the breakdown below. Not blanket-MIT. |
+| `reference/`, `LICENSE`, `THIRD_PARTY_NOTICES.md` | Original, except as noted. |
 
-`imac5k-stitch-layer-7.x.patch` contains erik2's single-display stitch
-**verbatim, with its logging intact**, and is therefore a derivative of that
-work.
-
-### Licensing of the vendored patches — unresolved
+### Licensing of the vendored patches — per patch, not per directory
 
 <a id="licensing-of-the-vendored-patches--unresolved"></a>
 
-**None of the six patch files carries a licence header, an SPDX identifier, or a
-copyright line.** `patches/amdgpu-5k/README.md` records their pinned upstream
-commit and SHA-256 checksums, and points here for the terms — so the two files
-refer to each other and the actual terms are stated in neither.
+Earlier revisions of this file treated the six patches as one undifferentiated
+blob and told readers to assume **GPL-2.0-only**. That was wrong in its reasoning
+and over-restrictive in its conclusion. Classified individually:
 
-The upstream kernel sources these derive from are GPL-2.0, and one file is
-verbatim upstream work, so GPL-2.0-only is the likely answer. It has not been
-confirmed, and it has not been asked. `mcirsta/linux-imac-5k` — the fork the
-stitch traces to — publishes no licence either (`NOASSERTION`).
+| Patch | Origin | Terms |
+|---|---|---|
+| `amdgpu-vce3-ring-align-mask.patch` | **Backport of upstream kernel commit `2ee98365`** (in 7.3-rc1, cc: stable) | **GPL-2.0-only.** Verbatim upstream kernel code; stated in the patch itself. Unambiguous. |
+| `imac5k-lean-core-7.2.x.patch` | A documented *lean rework* of the `mcirsta/linux-imac-5k` series, **ported by taprobane99** | **MIT** for the port (`taprobane99/iMac5KLinux`, © 2026). Underlying `mcirsta` fork: **unpublished licence** — see below. Substantially reworked here, so the dependency is on mcirsta, not on taprobane99. |
+| `imac5k-stitch-layer-7.x.patch` | erik2's stitch, carried through with logging intact, plus **one local fix** (9-byte tile-group id) | Inherits erik2's terms via `taprobane99`. **MIT** on that path; erik2's own repo is not separately credited with a licence. |
+| `amdgpu-hpd-skip-during-reset.patch` | Original fix, no upstream attribution | **GPL-2.0-only**, as a kernel patch. |
+| `amdgpu-vce-suspend-in-reset.patch` | Original fix, no upstream attribution | **GPL-2.0-only**, as a kernel patch. |
+| `imac5k-stitch-hide-slave.patch` | Original fix, no upstream attribution | **GPL-2.0-only**, as a kernel patch. |
 
-Until this is resolved with the upstream authors:
+**The `mcirsta` gap.** `imac5k-lean-core` derives from `mcirsta/linux-imac-5k`,
+whose repository publishes **no `LICENSE` file** (verified: `LICENSE` → HTTP 404,
+GitHub reports `NOASSERTION`). Its work was ported and released under MIT by
+`taprobane99`, who credits mcirsta as the original author. That is strong
+evidence the intent was permissive, and MIT is the working assumption here — but
+it is an **inference from the downstream release, not a licence grant from the
+author.** It has not been asked.
 
-- Treat `patches/amdgpu-5k/` as **GPL-2.0-only by assumption**, not as MIT.
-- Do not describe these patches as MIT anywhere.
-- Redistributing them in a product, rather than publishing them for reference,
-  needs the terms confirmed first.
+**Why the old "GPL-2.0 by assumption" was wrong.** It reasoned that because the
+patches modify GPL-2.0 kernel source, they must be GPL-2.0. A patch file is a diff
+*against* GPL-2.0 code, not a copy of it, and distributing patches under a
+permissive licence while targeting GPL-2.0 code is the ordinary arrangement —
+`taprobane99` does exactly this. Assuming the strictest reading "to be safe"
+obstructed use of work that is very likely MIT, without protecting anyone.
 
-This is recorded here rather than quietly left, because a repository that
-vendors third-party kernel patches should say plainly that the terms are unknown
-instead of implying they are settled.
+**Practical guidance:**
+
+- Patches listed as GPL-2.0-only above carry no ambiguity; treat them as such.
+- `imac5k-stitch-layer-7.x.patch` and the `taprobane99`-ported content in
+  `imac5k-lean-core` are **MIT on the evidence available**.
+- Redistributing any of these inside a **product** rather than publishing them
+  for reference is the one case that needs the `mcirsta` question settled first.
+  Publishing this repository, or building and using the module personally, is
+  not the concern.
+
+This is recorded per patch rather than quietly left as a directory-wide
+blanket, because six files with three different provenances do not share one
+answer. Where a term is an inference rather than a grant, it says so.
