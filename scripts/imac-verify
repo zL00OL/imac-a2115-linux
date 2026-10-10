@@ -40,15 +40,25 @@ PASS=0; FAIL=0; WARN=0; UNK=0
 ok()   { printf '  [ ok ] %s\n' "$*"; PASS=$((PASS+1)); }
 no()   { printf '  [FAIL] %s\n' "$*"; FAIL=$((FAIL+1)); }
 warn() { printf '  [warn] %s\n' "$*"; WARN=$((WARN+1)); }
+
+# Space-separated membership test, used for the srcversion lists. Those hold one
+# value per kernel: rebuilding the same patches against a new source tree yields
+# a new srcversion, so the test is "is this one of the known values", not equality
+# against a single constant.
+in_list() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 unk()  { printf '  [????] %s\n' "$*"; UNK=$((UNK+1)); }
 info() { printf '  ->     %s\n' "$*"; }
 sec()  { printf '\n%s\n' "$*"; }
 
 # Values verified on the reference machine (docs/reference-system.md)
-REF_PATCHED_SRCV=6BE242C1C62DD79046F2E9A
-REF_STOCK_SRCV=4FA5DDFCFF3DDAE9F5FE22E
+# Measured srcversions. The patched value differs PER KERNEL - a rebuild of the
+# same patches against a new tree produces a new srcversion - so this is a list,
+# not a single constant, and membership is the test. Hardcoding the 7.2.2 value
+# made this script report a healthy 7.2.8 module as unrecognised.
+REF_PATCHED_SRCV="6BE242C1C62DD79046F2E9A 31F26E96354E3264CF28120"
+REF_STOCK_SRCV="4FA5DDFCFF3DDAE9F5FE22E 4BFAA1013BED7E3FB557CF0"
 REF_STITCH=-1
-REF_KERNEL=7.2.2-1-default
+REF_KERNEL=7.2.8-1-default
 
 echo "=============================================================="
 echo " iMac A2115 - configuration verification   $(date -Is)"
@@ -100,11 +110,12 @@ AMDSRC=$(cat /sys/module/amdgpu/srcversion 2>/dev/null)
 if [ -z "$AMDSRC" ]; then
   no "amdgpu is not loaded"
   info "a black display here is expected; see docs/recovery.md"
-elif [ "$AMDSRC" = "$REF_PATCHED_SRCV" ]; then
+elif in_list "$AMDSRC" "$REF_PATCHED_SRCV"; then
   ok "patched amdgpu is running ($AMDSRC)"
-elif [ "$AMDSRC" = "$REF_STOCK_SRCV" ]; then
+elif in_list "$AMDSRC" "$REF_STOCK_SRCV"; then
   no "STOCK amdgpu is running ($AMDSRC) - the 5K patch is missing"
-  info "the patched driver lives only inside initrd-stackC"
+  info "a stock amdgpu has no tiled_stitch parameter, so this boots ONE tile"
+  info "rebuild it: sudo /usr/local/libexec/imac-amdgpu-install --kver $(uname -r)"
   info "see docs/recovery.md#recovery-2"
 else
   warn "amdgpu srcversion $AMDSRC matches neither the reference patched nor stock build"
@@ -132,13 +143,22 @@ case "$CMDLINE" in
 esac
 
 # connectors
+#
+# On a correctly tiled panel there is exactly ONE connected connector: eDP-1,
+# carrying the full 5120x2880 framebuffer across both tiles. The slave tile is
+# deliberately hidden by imac5k-stitch-hide-slave.patch, so it does NOT appear as
+# a second "connected" entry. Counting connectors to decide whether both panels
+# are lit therefore reports the healthy state as "one panel is dark", which is
+# exactly backwards.
+#
+# The real test is the framebuffer width below: 5120 means both tiles are live.
 NC=0
 for f in /sys/class/drm/card*/status; do
   [ "$(cat "$f" 2>/dev/null)" = "connected" ] && NC=$((NC+1))
 done
-if [ "$NC" -ge 2 ]; then ok "$NC connectors connected (both panels)"
-elif [ "$NC" -eq 1 ]; then warn "only $NC connector connected - one panel is dark"
-else no "no connectors connected"; fi
+if [ "$NC" -ge 1 ]; then
+  ok "$NC connector connected (eDP-1 carries both tiles; slave is hidden by design)"
+elif [ "$NC" -eq 0 ]; then no "no connectors connected"; fi
 
 # framebuffer size, from the connector modes
 # A connector's modes file holds one WxH per line, optionally tab-separated and
@@ -256,8 +276,21 @@ case "$GB" in
   "")           warn "no gpu_bind=0 in modprobe.d - enabling the iGPU risks the speakers" ;;
   *)            warn "gpu_bind setting present but not the expected 0: $GB" ;;
 esac
+# A bound i915 is EXPECTED and healthy. The iGPU is deliberately published by the
+# set_os-patched kernel so QuickSync/VA-API is available for encoding. It renders
+# nothing: every connector on card1 is disconnected and amdgpu owns the panel.
+# What actually matters for audio is gpu_bind=0, checked above - the risk is the
+# iGPU stealing the HDA controller, not it existing.
 if lspci 2>/dev/null | grep -qi 'vga.*Intel'; then
-  warn "an Intel display controller is bound - check the speakers"
+  I915_CONN=0
+  for f in /sys/class/drm/card*-*/status; do
+    case "$f" in *card1-*) [ "$(cat "$f" 2>/dev/null)" = "connected" ] && I915_CONN=1 ;; esac
+  done
+  if [ "$I915_CONN" -eq 1 ]; then
+    warn "i915 has a CONNECTED connector - it may be driving the panel, not amdgpu"
+  else
+    ok "iGPU bound to i915 with no connected connector (renders nothing, by design)"
+  fi
 else
   ok "no Intel display controller bound"
 fi
