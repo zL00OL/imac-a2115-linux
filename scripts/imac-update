@@ -274,27 +274,86 @@ say "  running: zypper up"
 zypper --non-interactive up 2>&1 | tail -25 | sed 's/^/  /'
 ZRC=${PIPESTATUS[0]}
 say "  zypper exit: $ZRC"
-# zypper returns advisory codes that mean "succeeded, but":
-#   100 = reboot needed
-#   102 = restart zypper recommended
-#   103 = reboot and restart recommended
-# A kernel update returns one of these routinely. Treating them as fatal aborted
-# the run BEFORE the audio codec was rebuilt for the new kernel - worst possible
-# moment to stop.
+# zypper's advisory exit codes. All of 100-107 mean "the main action SUCCEEDED,
+# and additionally you should do something" - reboot, restart zypper, etc. The
+# range is documented in zypper's own source (src/Zypper.h):
+#
+#   int _exitInfoCode;  // hack for exitcodes that don't abort but are reported
+#                       // if the main action succeeded (e.g. 106, 107)
+#
+# This script previously whitelisted 100, 102 and 103 and treated everything
+# else as fatal. A kernel update returned 107, which is advisory, so the run
+# aborted at this point - after the ESP had been emptied and the new kernel
+# installed, but BEFORE the post-update steps that prune the old pair. That
+# filled the ESP with two pairs and left a truncated initrd as the boot default.
+# Lesson encoded here: on the advisory range, continue. Pruning is what makes
+# room, and pruning is several steps further down.
+#
+#   100 = reboot needed            103 = reboot + restart zypper
+#   101 = restart zypper           104 = reboot only (no zypper restart)
+#   102 = restart zypper           105-107 = related advisories
+#
 case "$ZRC" in
-  0)   say "  zypper exit: 0 (clean)" ;;
-  102) say "  zypper exit: 102 (reboot needed) - continuing with the rebuild"
-       ZRC=0 ;;
-  103) say "  zypper exit: 103 (zypper restart needed) - re-running zypper up once"
-       say "  (103 means some packages were left unapplied; this applies them)"
-       zypper --non-interactive up >/dev/null 2>&1
-       case "$?" in 0|102|103) ZRC=0 ;; *) die "zypper re-run failed" ;; esac ;;
-  *)   die "zypper exited $ZRC - inspect the output above before continuing" ;;
+  0)     say "  zypper exit: 0 (clean)" ;;
+  100|101|102|104|105|106|107)
+         say "  zypper exit: $ZRC (advisory - update succeeded, action needed)"
+         say "  continuing; the post-update steps below reclaim ESP space"
+         ZRC=0 ;;
+  103)   say "  zypper exit: 103 (zypper restart needed) - re-running zypper up once"
+         say "  (103 means some packages were left unapplied; this applies them)"
+         zypper --non-interactive up >/dev/null 2>&1
+         case "$?" in 0|100|101|102|103|104|105|106|107) ZRC=0 ;; *) die "zypper re-run failed" ;; esac ;;
+  *)     die "zypper exited $ZRC - inspect the output above before continuing" ;;
 esac
 
-# re-check ESP: zypper may have consumed it (new packages with kernel modules)
+# Re-check the ESP and RECLAIM it. Step 1 emptied it so the new pair would fit,
+# and zypper then wrote the new pair. Now two pairs are present and 198M does not
+# fit in 197M - this is exactly what happened on 2026-10-10, where the ESP hit
+# 100% and the running kernel's initrd was left truncated as the boot default.
+#
+# So this step does not merely report the number, it acts on it. The 97-esp-prune
+# hook normally does this on kernel install, but it keeps the NEWEST pair, and
+# the old pair is what has to go here. Pruning by hand, keeping the newest:
 AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
-say "  ESP free after update: ${AVAIL}M"
+ESPSZ=$(df -m --output=size /boot/efi | tail -1 | tr -d ' ')
+say "  ESP: ${AVAIL}M free of ${ESPSZ}M after the update"
+
+if [ "$AVAIL" -lt 45 ] && [ "$WANT_KERNEL" -eq 1 ]; then
+  say "  too tight - pruning superseded kernel payloads from the ESP"
+  NEWESTP=$(ls -1 /boot/efi/opensuse-slowroll/ 2>/dev/null | sort -V | tail -1)
+  for d in /boot/efi/opensuse-slowroll/*/; do
+    k=$(basename "$d")
+    [ "$k" = "$NEWESTP" ] && continue
+    # Never delete the running kernel's payload without a verified copy
+    # elsewhere. The XBOOTLDR holds it; confirm before removing anything.
+    if [ -f "/boot/efi-xbootldr/opensuse-slowroll/$k/initrd" ]; then
+      say "    removing $k (rollback copy verified on the XBOOTLDR)"
+      rm -rf "$d"
+    else
+      say "    SKIPPING $k - no verified copy on the XBOOTLDR"
+    fi
+  done
+  AVAIL=$(df -m --output=avail /boot/efi | tail -1 | tr -d ' ')
+  say "  ESP free now: ${AVAIL}M"
+  [ "$AVAIL" -ge 45 ] || die "still only ${AVAIL}M free after pruning; the ESP cannot hold this kernel pair"
+fi
+
+# Verify the boot default actually resolves to files that exist. This is the
+# failure that actually bites: an entry pointing at a pruned payload does not
+# error at boot, it just does not boot. Cheap to check here, expensive later.
+DEF=$(sed -n 's/^default=//p;s/^default[[:space:]]*//p' /boot/efi/loader/loader.conf 2>/dev/null | head -1)
+if [ -n "$DEF" ] && [ -f "/boot/efi/loader/entries/$DEF" ]; then
+  for p in $(awk '/^(linux|initrd)[[:space:]]/{for(i=2;i<=NF;i++) if($i ~ /^\//) print $i}' \
+             "/boot/efi/loader/entries/$DEF"); do
+    if [ ! -s "/boot/efi$p" ]; then
+      bad "boot entry $DEF points at $p which is MISSING or empty"
+      die "the boot default does not resolve - do not reboot, see docs/recovery.md"
+    fi
+  done
+  say "  boot default $DEF resolves to files that exist"
+else
+  warn "could not read the boot default from loader.conf; check it before rebooting"
+fi
 
 #------------------------------------------- 4. did the kernel actually move?
 step "4. kernel status"
